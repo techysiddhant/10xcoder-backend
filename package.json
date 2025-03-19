@@ -2,13 +2,18 @@
   "name": "backend",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy --minify"
+    "deploy": "wrangler deploy --minify",
+    "lint": "eslint",
+    "lint:fix": "eslint --fix"
   },
   "dependencies": {
     "hono": "^4.7.4"
   },
   "devDependencies": {
+    "@antfu/eslint-config": "^4.10.1",
     "@cloudflare/workers-types": "^4.20250214.0",
+    "eslint": "^9.10.0",
+    "eslint-plugin-format": "^1.0.1",
     "wrangler": "^3.109.2"
   }
 }
