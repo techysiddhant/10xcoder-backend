@@ -8,11 +8,15 @@
   },
   "dependencies": {
     "hono": "^4.7.4",
+    "hono-pino": "^0.8.0",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
     "stoker": "^1.4.2"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^4.10.1",
     "@cloudflare/workers-types": "^4.20250214.0",
+    "@types/node": "^22.13.10",
     "eslint": "^9.10.0",
     "eslint-plugin-format": "^1.0.1",
     "wrangler": "^3.109.2"
