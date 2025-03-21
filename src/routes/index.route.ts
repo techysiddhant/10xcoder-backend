@@ -3,6 +3,7 @@ import { createRoute, z } from "@hono/zod-openapi";
 
 const router = createRouter().openapi(
   createRoute({
+    tags: ["Index"],
     method: "get",
     path: "/",
     responses: {
