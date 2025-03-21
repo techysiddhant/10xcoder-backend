@@ -1,6 +1,7 @@
 {
   "name": "backend",
   "version": "1.0.0",
+  "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
@@ -9,6 +10,7 @@
   },
   "dependencies": {
     "@hono/zod-openapi": "^0.19.2",
+    "@scalar/hono-api-reference": "^0.7.2",
     "dotenv": "^16.4.7",
     "dotenv-expand": "^12.0.1",
     "hono": "^4.7.4",
