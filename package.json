@@ -6,13 +6,20 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
     "lint": "eslint",
-    "lint:fix": "eslint --fix"
+    "lint:fix": "eslint --fix",
+    "db:generate": "drizzle-kit generate",
+    "db:studio": "LOCAL_DB_PATH=$(find .wrangler/state/v3/d1/miniflare-D1DatabaseObject -type f -name '*.sqlite' -print -quit) drizzle-kit studio",
+    "db:migrate": "wrangler d1 migrations apply no-name --local",
+    "db:migrate:prod": "wrangler d1 migrations apply no-name --remote"
   },
   "dependencies": {
     "@hono/zod-openapi": "^0.19.2",
     "@scalar/hono-api-reference": "^0.7.2",
+    "better-auth": "^1.2.4",
+    "better-sqlite3": "^11.9.1",
     "dotenv": "^16.4.7",
     "dotenv-expand": "^12.0.1",
+    "drizzle-orm": "^0.41.0",
     "hono": "^4.7.4",
     "hono-pino": "^0.8.0",
     "pino": "^9.6.0",
@@ -24,8 +31,21 @@
     "@antfu/eslint-config": "^4.10.1",
     "@cloudflare/workers-types": "^4.20250214.0",
     "@types/node": "^22.13.10",
+    "drizzle-kit": "^0.30.5",
     "eslint": "^9.10.0",
     "eslint-plugin-format": "^1.0.1",
+    "tsx": "^4.19.3",
     "wrangler": "^3.109.2"
+  },
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild",
+      "sharp",
+      "workerd"
+    ],
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
   }
 }
