@@ -18,6 +18,13 @@ export type Env = {
     BETTER_AUTH_SECRET: string;
     BETTER_AUTH_URL: string;
     ORIGIN_URL: string;
+    EMAIL_VERIFICATION_CALLBACK_URL?: string;
+    RESEND_API_KEY: string;
+    RESEND_EMAIL: string;
+    GOOGLE_CLIENT_ID: string;
+    GOOGLE_CLIENT_SECRET: string;
+    GITHUB_CLIENT_ID: string;
+    GITHUB_CLIENT_SECRET: string;
   };
 };
 export interface UserAuth {
