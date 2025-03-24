@@ -29,11 +29,12 @@ export const initAuth = (env: Env["Bindings"]) => {
       requireEmailVerification: true,
       minPasswordLength: 8,
       maxPasswordLength: 128,
-      sendResetPassword: async ({ user, url }) => {
+      sendResetPassword: async ({ user, token }) => {
+        const newUrl = `${env.ORIGIN_URL}/reset-password?token=${token}`;
         const data = {
           to: user.email,
           subject: "Reset your password",
-          url,
+          url: newUrl,
           user,
         };
         await sendEmail(env, "reset-password", data);
