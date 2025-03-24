@@ -1,10 +1,11 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { createDB } from "@/db";
 import { admin, openAPI, username } from "better-auth/plugins";
-import { Env } from "./types";
+
+import { createDB } from "@/db";
 import { sendEmail } from "./resend";
-export const initAuth = (env: Env["Bindings"]) => {
+import type { Env } from "./types";
+export function initAuth(env: Env["Bindings"]) {
   const db = createDB(env);
   return betterAuth({
     database: drizzleAdapter(db, {
@@ -85,4 +86,4 @@ export const initAuth = (env: Env["Bindings"]) => {
       },
     },
   });
-};
+}
