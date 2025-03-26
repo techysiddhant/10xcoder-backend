@@ -4,6 +4,8 @@ import type { OpenAPIHono } from "@hono/zod-openapi";
 export type AppBindings = {
   Variables: {
     logger: PinoLogger;
+    user: UserAuth | null;
+    session: SessionAuth | null;
   };
   Bindings: Env["Bindings"];
 };
@@ -12,7 +14,36 @@ export type Env = {
   Bindings: {
     LOG_LEVEL: string;
     NODE_ENV: string;
-    DATABASE_URL: string;
+    DB: D1Database;
+    BETTER_AUTH_SECRET: string;
+    BETTER_AUTH_URL: string;
+    ORIGIN_URL: string;
+    EMAIL_VERIFICATION_CALLBACK_URL?: string;
+    RESEND_API_KEY: string;
+    RESEND_EMAIL: string;
+    GOOGLE_CLIENT_ID: string;
+    GOOGLE_CLIENT_SECRET: string;
+    GITHUB_CLIENT_ID: string;
+    GITHUB_CLIENT_SECRET: string;
   };
 };
+export interface UserAuth {
+  id: string;
+  name: string;
+  email: string;
+  emailVerified: boolean;
+  image?: string | null | undefined;
+  createdAt: Date;
+  updatedAt: Date;
+}
+export interface SessionAuth {
+  id: string;
+  expiresAt: Date;
+  token: string;
+  createdAt: Date;
+  updatedAt: Date;
+  ipAddress?: string | null | undefined;
+  userAgent?: string | null | undefined;
+  userId: string;
+}
 export type AppOpenAPI = OpenAPIHono<AppBindings>;
