@@ -105,7 +105,7 @@ export const tagsIndexes = sql`
 export const resourceTags = sqliteTable(
   "resource_tags",
   {
-    resourceId: integer("resource_id")
+    resourceId: text("resource_id")
       .notNull()
       .references(() => resources.id, { onDelete: "cascade" }),
     tagName: text("tag_name").notNull(), // Storing tag name for fast lookups
@@ -121,7 +121,7 @@ export const resourceTagsIndexes = sql`
 export const resourceUpvotes = sqliteTable(
   "resource_upvotes",
   {
-    resourceId: integer("resource_id")
+    resourceId: text("resource_id")
       .notNull()
       .references(() => resources.id, { onDelete: "cascade" }),
     userId: text("user_id")
