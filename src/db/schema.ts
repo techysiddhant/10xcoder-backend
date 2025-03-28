@@ -1,11 +1,12 @@
 import { sql } from "drizzle-orm";
+import { z } from "zod";
 import {
   sqliteTable,
   text,
   integer,
   primaryKey,
 } from "drizzle-orm/sqlite-core";
-
+import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 export const user = sqliteTable("user", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -75,11 +76,17 @@ export const resources = sqliteTable("resources", {
   resourceType: text("resource_type").notNull().$type<"video" | "article">(),
   categoryName: text("category_name").notNull(),
   upvoteCount: integer("upvote_count").notNull().default(0),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
-  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  // createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  // updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
   userId: text("user_id")
     .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
+  createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(
+    () => new Date()
+  ),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .$defaultFn(() => new Date())
+    .$onUpdate(() => new Date()),
 });
 
 export const resourcesIndexes = sql`
@@ -138,3 +145,22 @@ export const resourceUpvotesIndexes = sql`
   CREATE INDEX idx_upvotes_resource_id ON resource_upvotes(resource_id);
   CREATE INDEX idx_upvotes_user_id ON resource_upvotes(user_id);
 `;
+
+export const selectResourceSchema = createSelectSchema(resources);
+export const insertResourceSchema = createInsertSchema(resources, {
+  title: z.string().min(1),
+  resourceType: z.enum(["video", "article"]),
+  categoryName: z.string().min(1),
+  url: z.string().url(),
+})
+  .omit({
+    createdAt: true,
+    updatedAt: true,
+    id: true,
+    userId: true,
+  })
+  .extend({
+    tags: z.string().min(1),
+  });
+
+export const patchTasksSchema = insertResourceSchema.partial();

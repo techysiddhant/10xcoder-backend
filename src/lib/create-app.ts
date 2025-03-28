@@ -26,7 +26,6 @@ export default function createApp() {
   app.use("*", async (c, next) => {
     const auth = initAuth(c.env);
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
-
     if (!session) {
       c.set("user", null);
       c.set("session", null);
