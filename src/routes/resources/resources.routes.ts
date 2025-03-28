@@ -109,7 +109,7 @@ export const patch = createRoute({
     ),
     [HttpStatusCodes.UNPROCESSABLE_ENTITY]: jsonContentOneOf(
       [
-        createErrorSchema(insertResourceSchema).or(
+        createErrorSchema(patchResourceSchema).or(
           createErrorSchema(ResourceParamsSchema)
         ),
       ],
@@ -117,7 +117,34 @@ export const patch = createRoute({
     ),
   },
 });
+export const publish = createRoute({
+  path: "/resource/{id}/publish",
+  method: "patch",
+  request: {
+    params: ResourceParamsSchema,
+  },
+  tags,
+  responses: {
+    [HttpStatusCodes.OK]: jsonContent(
+      selectResourceSchema,
+      "The requested Resource"
+    ),
+    [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Unauthorized"
+    ),
+    [HttpStatusCodes.NOT_FOUND]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Resource not found"
+    ),
+    [HttpStatusCodes.UNPROCESSABLE_ENTITY]: jsonContent(
+      createErrorSchema(ResourceParamsSchema),
+      "Invalid Id errors"
+    ),
+  },
+});
 export type GetAllRoute = typeof getAll;
 export type CreateRoute = typeof create;
 export type GetOne = typeof getOne;
 export type PatchRoute = typeof patch;
+export type PublishRoute = typeof publish;

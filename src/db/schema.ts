@@ -15,7 +15,7 @@ export const user = sqliteTable("user", {
   image: text("image"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
-  role: text("role"),
+  role: text("role").notNull().$type<"user" | "admin">().default("user"),
   banned: integer("banned", { mode: "boolean" }),
   banReason: text("ban_reason"),
   banExpires: integer("ban_expires", { mode: "timestamp" }),
@@ -76,8 +76,9 @@ export const resources = sqliteTable("resources", {
   resourceType: text("resource_type").notNull().$type<"video" | "article">(),
   categoryName: text("category_name").notNull(),
   upvoteCount: integer("upvote_count").notNull().default(0),
-  // createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
-  // updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  isPublished: integer("is_published", { mode: "boolean" })
+    .notNull()
+    .default(false),
   userId: text("user_id")
     .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
@@ -146,7 +147,9 @@ export const resourceUpvotesIndexes = sql`
   CREATE INDEX idx_upvotes_user_id ON resource_upvotes(user_id);
 `;
 
-export const selectResourceSchema = createSelectSchema(resources);
+export const selectResourceSchema = createSelectSchema(resources).extend({
+  tags: z.array(z.string()),
+});
 export const insertResourceSchema = createInsertSchema(resources, {
   title: z.string().min(1),
   resourceType: z.enum(["video", "article"]),
@@ -158,6 +161,7 @@ export const insertResourceSchema = createInsertSchema(resources, {
     updatedAt: true,
     id: true,
     userId: true,
+    isPublished: true,
   })
   .extend({
     tags: z.string().min(1),
