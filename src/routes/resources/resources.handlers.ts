@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import { createDB } from "@/db";
@@ -10,11 +10,34 @@ import type {
   GetAllRoute,
   GetOne,
   PatchRoute,
+  PublishRoute,
 } from "./resources.routes";
 export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const db = createDB(c.env);
-  const resources = await db.query.resources.findMany();
-  return c.json(resources, HttpStatusCodes.OK);
+  const resources = await db.query.resources.findMany({
+    orderBy: (resources, { desc }) => desc(resources.createdAt),
+    where: (resources, { eq }) => eq(resources.isPublished, true),
+  });
+  const resourceTags = await db.query.resourceTags.findMany({
+    where: (resourceTags, { inArray }) =>
+      inArray(
+        resourceTags.resourceId,
+        resources.map((r) => r.id)
+      ),
+  });
+  // ✅ Merge tags into resources
+  const resourceTagsMap = resourceTags.reduce((acc, tag) => {
+    if (!acc[tag.resourceId]) acc[tag.resourceId] = [];
+    acc[tag.resourceId].push(tag.tagName);
+    return acc;
+  }, {} as Record<string, string[]>);
+
+  const formattedResources = resources.map((resource) => ({
+    ...resource,
+    tags: resourceTagsMap[resource.id] || [], // Attach tags array
+  }));
+
+  return c.json(formattedResources, HttpStatusCodes.OK);
 };
 export const create: AppRouteHandler<CreateRoute> = async (c) => {
   const resource = c.req.valid("json");
@@ -22,6 +45,7 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
     .split(",")
     .map((tag) => tag.trim().toLowerCase()) // Normalize to lowercase
     .filter((tag) => tag.length > 0);
+
   const user = c.get("user");
   if (!user || !user.id) {
     return c.json(
@@ -29,6 +53,7 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       HttpStatusCodes.UNAUTHORIZED
     );
   }
+
   const resourceType = resource.resourceType.toLocaleLowerCase();
   if (!isResourceType(resourceType)) {
     return c.json(
@@ -36,12 +61,16 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       HttpStatusCodes.BAD_REQUEST
     );
   }
+
   const db = createDB(c.env);
+
+  // Ensure category exists
   await db
     .insert(categories)
     .values({ name: resource.categoryName.toLowerCase() })
     .onConflictDoNothing();
 
+  // Create new resource
   const [newResource] = await db
     .insert(resources)
     .values({
@@ -55,6 +84,8 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       userId: user.id,
     })
     .returning();
+
+  // Insert tags & resource-tag mapping
   await Promise.all(
     tagNames.map(async (tagName) => {
       await db.insert(tags).values({ name: tagName }).onConflictDoNothing();
@@ -67,14 +98,26 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
         .onConflictDoNothing();
     })
   );
-  return c.json(newResource, HttpStatusCodes.CREATED);
+
+  // Fetch associated tags for the response
+  const associatedTags = await db.query.resourceTags.findMany({
+    where: (resourceTags, { eq }) =>
+      eq(resourceTags.resourceId, newResource.id),
+    columns: { tagName: true }, // Fetch only the tag names
+  });
+
+  return c.json(
+    { ...newResource, tags: associatedTags.map((t) => t.tagName) },
+    HttpStatusCodes.CREATED
+  );
 };
 
 export const getOne: AppRouteHandler<GetOne> = async (c) => {
   const params = c.req.param();
   const db = createDB(c.env);
   const resource = await db.query.resources.findFirst({
-    where: (resources, { eq }) => eq(resources.id, params.id),
+    where: (resources, { eq }) =>
+      eq(resources.id, params.id) && eq(resources.isPublished, true),
   });
   if (!resource) {
     return c.json(
@@ -82,7 +125,14 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
       HttpStatusCodes.NOT_FOUND
     );
   }
-  return c.json(resource, HttpStatusCodes.OK);
+  const associatedTags = await db.query.resourceTags.findMany({
+    where: (resourceTags, { eq }) => eq(resourceTags.resourceId, resource.id),
+    columns: { tagName: true }, // Fetch only the tag names
+  });
+  return c.json(
+    { ...resource, tags: associatedTags.map((t) => t.tagName) },
+    HttpStatusCodes.OK
+  );
 };
 
 export const patch: AppRouteHandler<PatchRoute> = async (c) => {
@@ -99,7 +149,10 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
       HttpStatusCodes.NOT_FOUND
     );
   }
-
+  await db
+    .insert(categories)
+    .values({ name: resource.categoryName! })
+    .onConflictDoNothing();
   const [updatedResource] = await db
     .update(resources)
     .set({
@@ -112,12 +165,92 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
     })
     .where(eq(resources.id, params.id))
     .returning();
-
   if (!updatedResource) {
     return c.json(
       { message: "Failed to update resource", success: false },
       HttpStatusCodes.INTERNAL_SERVER_ERROR
     );
   }
-  return c.json(updatedResource, HttpStatusCodes.OK);
+  if (resource.tags) {
+    const newTags = resource.tags
+      .split(",")
+      .map((tag) => tag.trim().toLowerCase()) // Normalize tags
+      .filter((tag) => tag.length > 0);
+
+    const existingTags = await db.query.resourceTags.findMany({
+      where: (resourceTags, { eq }) => eq(resourceTags.resourceId, params.id),
+    });
+    const existingTagNames = existingTags.map((tag) => tag.tagName);
+    const tagsToRemove = existingTagNames.filter(
+      (tag) => !newTags.includes(tag)
+    );
+
+    if (tagsToRemove.length > 0) {
+      await db
+        .delete(resourceTags)
+        .where(
+          and(
+            eq(resourceTags.resourceId, params.id),
+            inArray(resourceTags.tagName, tagsToRemove)
+          )
+        );
+    }
+
+    await Promise.all(
+      newTags.map(async (tagName) => {
+        await db.insert(tags).values({ name: tagName }).onConflictDoNothing();
+        await db
+          .insert(resourceTags)
+          .values({
+            resourceId: params.id,
+            tagName,
+          })
+          .onConflictDoNothing();
+      })
+    );
+  }
+  const associatedTags = await db.query.resourceTags.findMany({
+    where: (resourceTags, { eq }) =>
+      eq(resourceTags.resourceId, updatedResource.id),
+    columns: { tagName: true }, // Fetch only the tag names
+  });
+  return c.json(
+    { ...updatedResource, tags: associatedTags.map((t) => t.tagName) },
+    HttpStatusCodes.OK
+  );
+};
+
+export const publish: AppRouteHandler<PublishRoute> = async (c) => {
+  const params = c.req.param();
+  const db = createDB(c.env);
+  const user = c.get("user");
+  if (!user || !user.id || user.role !== "admin") {
+    return c.json(
+      { message: "User not authenticated", success: false },
+      HttpStatusCodes.UNAUTHORIZED
+    );
+  }
+  const resource = await db.query.resources.findFirst({
+    where: (resources, { eq }) => eq(resources.id, params.id),
+  });
+  if (!resource) {
+    return c.json(
+      { message: "Resource not found", success: false },
+      HttpStatusCodes.NOT_FOUND
+    );
+  }
+  await db
+    .update(resources)
+    .set({ isPublished: true })
+    .where(eq(resources.id, params.id))
+    .returning();
+
+  const associatedTags = await db.query.resourceTags.findMany({
+    where: (resourceTags, { eq }) => eq(resourceTags.resourceId, resource.id),
+    columns: { tagName: true }, // Fetch only the tag names
+  });
+  return c.json(
+    { ...resource, tags: associatedTags.map((t) => t.tagName) },
+    HttpStatusCodes.OK
+  );
 };

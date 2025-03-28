@@ -5,6 +5,7 @@ const router = createRouter()
   .openapi(routes.getAll, handlers.getAll)
   .openapi(routes.create, handlers.create)
   .openapi(routes.getOne, handlers.getOne)
-  .openapi(routes.patch, handlers.patch);
+  .openapi(routes.patch, handlers.patch)
+  .openapi(routes.publish, handlers.publish);
 
 export default router;

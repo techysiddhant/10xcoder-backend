@@ -1,0 +1,1 @@
+ALTER TABLE `resources` ADD `is_published` integer DEFAULT false NOT NULL;

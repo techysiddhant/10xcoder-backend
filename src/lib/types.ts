@@ -35,6 +35,7 @@ export interface UserAuth {
   image?: string | null | undefined;
   createdAt: Date;
   updatedAt: Date;
+  role: "user" | "admin";
 }
 export interface SessionAuth {
   id: string;
