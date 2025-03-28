@@ -17,7 +17,7 @@ export const isAdmin = createMiddleware(async (c, next) => {
       {
         message: "Unauthorized: Authentication required",
         success: false,
-        error: "AUTH_REQUIRED",
+        error: "INSUFFICIENT_PERMISSIONS",
       },
       HttpStatusCodes.UNAUTHORIZED
     );
