@@ -64,6 +64,10 @@ export const getOne = createRoute({
       selectResourceSchema,
       "The requested Resource"
     ),
+    [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Unauthorized"
+    ),
     [HttpStatusCodes.NOT_FOUND]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
       "Resource not found"
@@ -86,6 +90,10 @@ export const patch = createRoute({
     [HttpStatusCodes.OK]: jsonContent(
       selectResourceSchema,
       "The updated Resource"
+    ),
+    [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Unauthorized"
     ),
     [HttpStatusCodes.BAD_REQUEST]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),

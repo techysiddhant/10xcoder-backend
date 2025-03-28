@@ -21,7 +21,14 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
   const tagNames = resource.tags
     .split(",")
     .map((tag) => tag.trim().toLowerCase()) // Normalize to lowercase
-    .filter((tag) => tag.length > 0); // Remove empty strings
+    .filter((tag) => tag.length > 0);
+  const user = c.get("user");
+  if (!user || !user.id) {
+    return c.json(
+      { message: "User not authenticated", success: false },
+      HttpStatusCodes.UNAUTHORIZED
+    );
+  }
   const resourceType = resource.resourceType.toLocaleLowerCase();
   if (!isResourceType(resourceType)) {
     return c.json(
@@ -29,7 +36,6 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       HttpStatusCodes.BAD_REQUEST
     );
   }
-  const user = c.get("user");
   const db = createDB(c.env);
   await db
     .insert(categories)
@@ -46,7 +52,7 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       resourceType,
       categoryName: resource.categoryName.toLowerCase(),
       id: nanoid(),
-      userId: user?.id!,
+      userId: user.id,
     })
     .returning();
   await Promise.all(
