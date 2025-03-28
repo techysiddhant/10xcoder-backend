@@ -163,4 +163,4 @@ export const insertResourceSchema = createInsertSchema(resources, {
     tags: z.string().min(1),
   });
 
-export const patchTasksSchema = insertResourceSchema.partial();
+export const patchResourceSchema = insertResourceSchema.partial();

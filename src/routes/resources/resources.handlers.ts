@@ -1,16 +1,16 @@
-import {
+import { eq } from "drizzle-orm";
+import { nanoid } from "nanoid";
+import * as HttpStatusCodes from "stoker/http-status-codes";
+import { createDB } from "@/db";
+import { categories, resources, resourceTags, tags } from "@/db/schema";
+import { isResourceType } from "@/lib/utils";
+import type { AppRouteHandler } from "@/lib/types";
+import type {
   CreateRoute,
   GetAllRoute,
   GetOne,
   PatchRoute,
 } from "./resources.routes";
-import { AppRouteHandler } from "@/lib/types";
-import * as HttpStatusCodes from "stoker/http-status-codes";
-import { createDB } from "@/db";
-import { categories, resources, resourceTags, tags } from "@/db/schema";
-import { nanoid } from "nanoid";
-import { isResourceType } from "@/lib/utils";
-import { eq } from "drizzle-orm";
 export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const db = createDB(c.env);
   const resources = await db.query.resources.findMany();
@@ -52,10 +52,6 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
   await Promise.all(
     tagNames.map(async (tagName) => {
       await db.insert(tags).values({ name: tagName }).onConflictDoNothing();
-    })
-  );
-  await Promise.all(
-    tagNames.map(async (tagName) => {
       await db
         .insert(resourceTags)
         .values({
@@ -65,23 +61,7 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
         .onConflictDoNothing();
     })
   );
-
-  return c.json(
-    {
-      id: newResource.id,
-      image: newResource.image,
-      createdAt: newResource.createdAt,
-      updatedAt: newResource.updatedAt,
-      userId: newResource.userId,
-      title: newResource.title,
-      description: newResource.description,
-      url: newResource.url,
-      resourceType: newResource.resourceType,
-      categoryName: newResource.categoryName,
-      upvoteCount: newResource.upvoteCount,
-    },
-    HttpStatusCodes.CREATED
-  );
+  return c.json(newResource, HttpStatusCodes.CREATED);
 };
 
 export const getOne: AppRouteHandler<GetOne> = async (c) => {
@@ -103,6 +83,17 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
   const params = c.req.param();
   const resource = c.req.valid("json");
   const db = createDB(c.env);
+  const existingResource = await db.query.resources.findFirst({
+    where: (resources, { eq }) => eq(resources.id, params.id),
+  });
+
+  if (!existingResource) {
+    return c.json(
+      { message: "Resource not found", success: false },
+      HttpStatusCodes.NOT_FOUND
+    );
+  }
+
   const [updatedResource] = await db
     .update(resources)
     .set({
@@ -115,20 +106,12 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
     })
     .where(eq(resources.id, params.id))
     .returning();
-  return c.json(
-    {
-      id: updatedResource.id,
-      image: updatedResource.image,
-      createdAt: updatedResource.createdAt,
-      updatedAt: updatedResource.updatedAt,
-      userId: updatedResource.userId,
-      title: updatedResource.title,
-      description: updatedResource.description,
-      url: updatedResource.url,
-      resourceType: updatedResource.resourceType,
-      categoryName: updatedResource.categoryName,
-      upvoteCount: updatedResource.upvoteCount,
-    },
-    HttpStatusCodes.OK
-  );
+
+  if (!updatedResource) {
+    return c.json(
+      { message: "Failed to update resource", success: false },
+      HttpStatusCodes.INTERNAL_SERVER_ERROR
+    );
+  }
+  return c.json(updatedResource, HttpStatusCodes.OK);
 };

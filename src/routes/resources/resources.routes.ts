@@ -1,6 +1,6 @@
 import {
   insertResourceSchema,
-  patchTasksSchema,
+  patchResourceSchema,
   selectResourceSchema,
 } from "@/db/schema";
 import { createRoute, z } from "@hono/zod-openapi";
@@ -80,7 +80,7 @@ export const patch = createRoute({
   tags,
   request: {
     params: ResourceParamsSchema,
-    body: jsonContentRequired(patchTasksSchema, "The Resource update"),
+    body: jsonContentRequired(patchResourceSchema, "The Resource update"),
   },
   responses: {
     [HttpStatusCodes.OK]: jsonContent(
@@ -90,6 +90,14 @@ export const patch = createRoute({
     [HttpStatusCodes.BAD_REQUEST]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
       "Bad Request"
+    ),
+    [HttpStatusCodes.NOT_FOUND]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Resource Not Found"
+    ),
+    [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Internal Server Error"
     ),
     [HttpStatusCodes.UNPROCESSABLE_ENTITY]: jsonContentOneOf(
       [
