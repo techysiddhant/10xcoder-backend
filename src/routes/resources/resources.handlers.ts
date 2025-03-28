@@ -241,7 +241,7 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
   }
   await db
     .update(resources)
-    .set({ isPublished: user?.role === "admin" ? true : false })
+    .set({ isPublished: true })
     .where(eq(resources.id, params.id))
     .returning();
 
