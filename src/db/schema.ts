@@ -162,7 +162,6 @@ export const insertResourceSchema = createInsertSchema(resources, {
 
       if (!(file instanceof File)) return false;
 
-      const allowedTypes = ["image/jpeg", "image/png"];
       if (!isValidImageType(file)) {
         return false; // Invalid file type
       }
