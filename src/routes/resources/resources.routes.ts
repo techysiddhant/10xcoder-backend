@@ -98,7 +98,7 @@ export const patch = createRoute({
           schema: patchResourceSchema,
         },
       },
-      description: "The Resource to create",
+      description: "The Resource to update",
     },
   },
   responses: {
