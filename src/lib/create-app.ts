@@ -5,6 +5,8 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { defaultHook } from "stoker/openapi";
 import { cors } from "hono/cors";
 import { initAuth } from "./auth";
+import { cloudflareRateLimiter } from "@hono-rate-limiter/cloudflare";
+
 export function createRouter() {
   return new OpenAPIHono<AppBindings>({ strict: false, defaultHook });
 }
@@ -22,7 +24,14 @@ export default function createApp() {
       credentials: true,
     })
   );
-
+  app.use("*", async (c, next) => {
+    cloudflareRateLimiter<AppBindings>({
+      rateLimitBinding: (c) => c.env.MY_RATE_LIMITER,
+      keyGenerator: (c) => c.req.header("cf-connecing-ip") ?? "",
+    });
+    console.log("HItting Rate Limiters");
+    return next();
+  });
   app.use("*", async (c, next) => {
     const auth = initAuth(c.env);
     const session = await auth.api.getSession({ headers: c.req.raw.headers });

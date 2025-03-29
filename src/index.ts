@@ -7,7 +7,6 @@ import { auth } from "./middlewares/auth";
 const app = createApp();
 configureOpenAPI(app);
 const routes = [index, resources];
-
 app.on(["POST", "GET"], "/api/auth/*", (c) => {
   if (c.req.path === "/api/auth/use-session") {
     const session = c.get("session");
