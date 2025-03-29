@@ -15,12 +15,12 @@
   //     "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   //   }
   // ],
-  // "r2_buckets": [
-  //   {
-  //     "binding": "MY_BUCKET",
-  //     "bucket_name": "my-bucket"
-  //   }
-  // ],
+  "r2_buckets": [
+    {
+      "bucket_name": "no-name",
+      "binding": "MY_BUCKET"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

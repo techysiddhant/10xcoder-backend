@@ -11,6 +11,7 @@ import {
   jsonContentRequired,
 } from "stoker/openapi/helpers";
 import { createErrorSchema } from "stoker/openapi/schemas";
+import { ZodSchema } from "zod";
 const tags = ["Resources"];
 const ResourceParamsSchema = z.object({
   id: z.string().min(3),
@@ -26,12 +27,20 @@ export const getAll = createRoute({
     ),
   },
 });
+
 export const create = createRoute({
   path: "/resources",
   method: "post",
   tags,
   request: {
-    body: jsonContentRequired(insertResourceSchema, "The Resource to create"),
+    body: {
+      content: {
+        "multipart/form-data": {
+          schema: insertResourceSchema,
+        },
+      },
+      description: "The Resource to create",
+    },
   },
   responses: {
     [HttpStatusCodes.CREATED]: jsonContent(
@@ -41,6 +50,10 @@ export const create = createRoute({
     [HttpStatusCodes.BAD_REQUEST]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
       "Bad Request"
+    ),
+    [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Internal Server Error"
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
@@ -82,9 +95,21 @@ export const patch = createRoute({
   path: "/resource/{id}",
   method: "patch",
   tags,
+  // request: {
+  //   params: ResourceParamsSchema,
+  //   body: jsonContentRequired(patchResourceSchema, "The Resource update"),
+  // },
   request: {
     params: ResourceParamsSchema,
-    body: jsonContentRequired(patchResourceSchema, "The Resource update"),
+    body: {
+      content: {
+        "multipart/form-data": {
+          schema: patchResourceSchema,
+        },
+      },
+      description: "The Resource to create",
+    },
+    // body: multipartContent(insertResourceSchema, "The Resource to create"),
   },
   responses: {
     [HttpStatusCodes.OK]: jsonContent(

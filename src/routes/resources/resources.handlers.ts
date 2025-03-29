@@ -1,9 +1,9 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, is } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import { createDB } from "@/db";
 import { categories, resources, resourceTags, tags } from "@/db/schema";
-import { isResourceType } from "@/lib/utils";
+import { isResourceType, isValidImageType } from "@/lib/utils";
 import type { AppRouteHandler } from "@/lib/types";
 import type {
   CreateRoute,
@@ -40,13 +40,22 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   return c.json(formattedResources, HttpStatusCodes.OK);
 };
 export const create: AppRouteHandler<CreateRoute> = async (c) => {
-  const resource = c.req.valid("json");
-  const tagNames = resource.tags
+  const {
+    tags: tagsArray,
+    title,
+    description,
+    url,
+    image,
+    resourceType,
+    categoryName,
+  } = c.req.valid("form");
+  const tagNames = tagsArray
     .split(",")
     .map((tag) => tag.trim().toLowerCase()) // Normalize to lowercase
     .filter((tag) => tag.length > 0);
 
   const user = c.get("user");
+
   if (!user || !user.id) {
     return c.json(
       { message: "User not authenticated", success: false },
@@ -54,32 +63,48 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
     );
   }
 
-  const resourceType = resource.resourceType.toLocaleLowerCase();
   if (!isResourceType(resourceType)) {
     return c.json(
       { message: "Invalid resource type", success: false },
       HttpStatusCodes.BAD_REQUEST
     );
   }
+  if (image && !isValidImageType(image)) {
+    return c.json(
+      { message: "Invalid image type", success: false },
+      HttpStatusCodes.BAD_REQUEST
+    );
+  }
 
   const db = createDB(c.env);
+  let imageKey;
+  if (image) {
+    imageKey = image.name + nanoid(5);
+    const imageR2 = await c.env.MY_BUCKET.put(imageKey, image);
+    if (!imageR2) {
+      return c.json(
+        { message: "Failed to upload image", success: false },
+        HttpStatusCodes.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
 
   // Ensure category exists
   await db
     .insert(categories)
-    .values({ name: resource.categoryName.toLowerCase() })
+    .values({ name: categoryName.toLowerCase() })
     .onConflictDoNothing();
 
   // Create new resource
   const [newResource] = await db
     .insert(resources)
     .values({
-      title: resource.title,
-      description: resource.description,
-      url: resource.url,
-      image: resource.image,
+      title: title,
+      description: description,
+      url: url,
+      image: imageKey,
       resourceType,
-      categoryName: resource.categoryName.toLowerCase(),
+      categoryName: categoryName.toLowerCase(),
       id: nanoid(),
       userId: user.id,
     })
@@ -137,7 +162,7 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
 
 export const patch: AppRouteHandler<PatchRoute> = async (c) => {
   const params = c.req.param();
-  const resource = c.req.valid("json");
+  const resource = c.req.valid("form");
   const db = createDB(c.env);
   const existingResource = await db.query.resources.findFirst({
     where: (resources, { eq }) => eq(resources.id, params.id),
@@ -149,6 +174,28 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
       HttpStatusCodes.NOT_FOUND
     );
   }
+  if (resource.image && isValidImageType(resource.image)) {
+    return c.json(
+      { message: "Invalid image type", success: false },
+      HttpStatusCodes.BAD_REQUEST
+    );
+  }
+  let newImageKey = existingResource.image;
+
+  if (resource.image) {
+    newImageKey = resource.image.name + nanoid(5);
+    if (existingResource.image) {
+      await c.env.MY_BUCKET.delete(existingResource.image);
+    }
+    const imageR2 = await c.env.MY_BUCKET.put(newImageKey, resource.image!);
+    if (!imageR2) {
+      return c.json(
+        { message: "Failed to upload image", success: false },
+        HttpStatusCodes.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
   await db
     .insert(categories)
     .values({ name: resource.categoryName! })
@@ -159,7 +206,7 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
       title: resource.title,
       description: resource.description,
       url: resource.url,
-      image: resource.image,
+      image: newImageKey,
       resourceType: resource.resourceType,
       categoryName: resource.categoryName,
     })

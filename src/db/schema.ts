@@ -7,6 +7,7 @@ import {
   primaryKey,
 } from "drizzle-orm/sqlite-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
+import { isValidImageType } from "@/lib/utils";
 export const user = sqliteTable("user", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -155,6 +156,24 @@ export const insertResourceSchema = createInsertSchema(resources, {
   resourceType: z.enum(["video", "article"]),
   categoryName: z.string().min(1),
   url: z.string().url(),
+  image: z
+    .custom<File | undefined>((file) => {
+      if (!file) return true; // Allow no image (optional)
+
+      if (!(file instanceof File)) return false;
+
+      const allowedTypes = ["image/jpeg", "image/png"];
+      if (!isValidImageType(file)) {
+        return false; // Invalid file type
+      }
+
+      if (file.size > 2 * 1024 * 1024) {
+        return false; // File too large (2MB max)
+      }
+
+      return true;
+    }, "Invalid image file (must be JPEG/PNG, max 2MB)")
+    .optional(),
 })
   .omit({
     createdAt: true,
@@ -162,6 +181,7 @@ export const insertResourceSchema = createInsertSchema(resources, {
     id: true,
     userId: true,
     isPublished: true,
+    upvoteCount: true,
   })
   .extend({
     tags: z.string().min(1),
