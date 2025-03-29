@@ -5,13 +5,8 @@ import {
 } from "@/db/schema";
 import { createRoute, z } from "@hono/zod-openapi";
 import * as HttpStatusCodes from "stoker/http-status-codes";
-import {
-  jsonContent,
-  jsonContentOneOf,
-  jsonContentRequired,
-} from "stoker/openapi/helpers";
+import { jsonContent, jsonContentOneOf } from "stoker/openapi/helpers";
 import { createErrorSchema } from "stoker/openapi/schemas";
-import { ZodSchema } from "zod";
 const tags = ["Resources"];
 const ResourceParamsSchema = z.object({
   id: z.string().min(3),
@@ -95,10 +90,6 @@ export const patch = createRoute({
   path: "/resource/{id}",
   method: "patch",
   tags,
-  // request: {
-  //   params: ResourceParamsSchema,
-  //   body: jsonContentRequired(patchResourceSchema, "The Resource update"),
-  // },
   request: {
     params: ResourceParamsSchema,
     body: {
@@ -109,7 +100,6 @@ export const patch = createRoute({
       },
       description: "The Resource to create",
     },
-    // body: multipartContent(insertResourceSchema, "The Resource to create"),
   },
   responses: {
     [HttpStatusCodes.OK]: jsonContent(
