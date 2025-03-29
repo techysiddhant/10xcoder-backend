@@ -28,6 +28,8 @@ export type Env = {
     MY_BUCKET: R2Bucket;
     MY_KV: KVNamespace;
     MY_RATE_LIMITER: any;
+    UPSTASH_REDIS_REST_URL: string;
+    UPSTASH_REDIS_REST_TOKEN: string;
   };
 };
 export interface UserAuth {
