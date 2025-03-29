@@ -1,4 +1,4 @@
-import { and, eq, inArray, is } from "drizzle-orm";
+import { and, eq, inArray, is, like, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import { createDB } from "@/db";
@@ -13,14 +13,36 @@ import type {
   PublishRoute,
 } from "./resources.routes";
 export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
+  let type = c.req.query("type");
+  const category = c.req.query("category");
+  const q = c.req.query("q");
+  const tags = c.req.query("tags"); // tags like nextjs,reactjs, in this format
   const db = createDB(c.env);
-  const cacheData = await c.env.MY_KV.get("resources");
+  const isFiltered = type || category || q || tags;
+  type = type && isResourceType(type) ? type : undefined;
+  const cacheKey = isFiltered
+    ? `resources:${JSON.stringify({ type, category, q, tags })}`
+    : "resources";
+  const cacheData = await c.env.MY_KV.get(cacheKey);
   if (cacheData) {
     return c.json(JSON.parse(cacheData), HttpStatusCodes.OK);
   }
   const resources = await db.query.resources.findMany({
     orderBy: (resources, { desc }) => desc(resources.createdAt),
-    where: (resources, { eq }) => eq(resources.isPublished, true),
+    where: (resources, { and, eq, inArray }) =>
+      and(
+        eq(resources.isPublished, true),
+        type
+          ? eq(resources.resourceType, type as "video" | "article")
+          : undefined,
+        category ? eq(resources.categoryName, category) : undefined,
+        q
+          ? like(
+              sql`LOWER(${resources.title})`,
+              sql.join([`%${q.toLowerCase()}%`])
+            )
+          : undefined
+      ),
   });
   const resourceTags = await db.query.resourceTags.findMany({
     where: (resourceTags, { inArray }) =>
@@ -36,12 +58,19 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
     return acc;
   }, {} as Record<string, string[]>);
 
-  const formattedResources = resources.map((resource) => ({
+  let formattedResources = resources.map((resource) => ({
     ...resource,
     tags: resourceTagsMap[resource.id] || [], // Attach tags array
   }));
-
-  await c.env.MY_KV.put("resources", JSON.stringify(formattedResources));
+  if (tags) {
+    const tagArray = tags.split(",").map((tag) => tag.trim().toLowerCase());
+    formattedResources = formattedResources.filter((resource) =>
+      tagArray.every((tag) => resource.tags.includes(tag))
+    );
+  }
+  await c.env.MY_KV.put(cacheKey, JSON.stringify(formattedResources), {
+    expirationTtl: 60 * 10,
+  });
   return c.json(formattedResources, HttpStatusCodes.OK);
 };
 export const create: AppRouteHandler<CreateRoute> = async (c) => {
