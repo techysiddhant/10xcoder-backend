@@ -14,6 +14,10 @@ import type {
 } from "./resources.routes";
 export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const db = createDB(c.env);
+  const cacheData = await c.env.MY_KV.get("resources");
+  if (cacheData) {
+    return c.json(JSON.parse(cacheData), HttpStatusCodes.OK);
+  }
   const resources = await db.query.resources.findMany({
     orderBy: (resources, { desc }) => desc(resources.createdAt),
     where: (resources, { eq }) => eq(resources.isPublished, true),
@@ -37,6 +41,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
     tags: resourceTagsMap[resource.id] || [], // Attach tags array
   }));
 
+  await c.env.MY_KV.put("resources", JSON.stringify(formattedResources));
   return c.json(formattedResources, HttpStatusCodes.OK);
 };
 export const create: AppRouteHandler<CreateRoute> = async (c) => {
@@ -130,7 +135,7 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       eq(resourceTags.resourceId, newResource.id),
     columns: { tagName: true }, // Fetch only the tag names
   });
-
+  await c.env.MY_KV.delete("resources");
   return c.json(
     { ...newResource, tags: associatedTags.map((t) => t.tagName) },
     HttpStatusCodes.CREATED
@@ -139,6 +144,10 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
 
 export const getOne: AppRouteHandler<GetOne> = async (c) => {
   const params = c.req.param();
+  const cacheData = await c.env.MY_KV.get(`resource-${params.id}`);
+  if (cacheData) {
+    return c.json(JSON.parse(cacheData), HttpStatusCodes.OK);
+  }
   const db = createDB(c.env);
   const resource = await db.query.resources.findFirst({
     where: (resources, { eq }) =>
@@ -154,6 +163,12 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
     where: (resourceTags, { eq }) => eq(resourceTags.resourceId, resource.id),
     columns: { tagName: true }, // Fetch only the tag names
   });
+
+  await c.env.MY_KV.put(
+    `resource-${params.id}`,
+    JSON.stringify({ ...resource, tags: associatedTags.map((t) => t.tagName) }),
+    { expirationTtl: 60 * 10 }
+  );
   return c.json(
     { ...resource, tags: associatedTags.map((t) => t.tagName) },
     HttpStatusCodes.OK
@@ -261,6 +276,14 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
       eq(resourceTags.resourceId, updatedResource.id),
     columns: { tagName: true }, // Fetch only the tag names
   });
+  await c.env.MY_KV.put(
+    `resource-${params.id}`,
+    JSON.stringify({
+      ...updatedResource,
+      tags: associatedTags.map((t) => t.tagName),
+    }),
+    { expirationTtl: 60 * 10 }
+  );
   return c.json(
     { ...updatedResource, tags: associatedTags.map((t) => t.tagName) },
     HttpStatusCodes.OK
@@ -296,6 +319,7 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
     where: (resourceTags, { eq }) => eq(resourceTags.resourceId, resource.id),
     columns: { tagName: true }, // Fetch only the tag names
   });
+  await c.env.MY_KV.delete("resources");
   return c.json(
     { ...resource, tags: associatedTags.map((t) => t.tagName) },
     HttpStatusCodes.OK
