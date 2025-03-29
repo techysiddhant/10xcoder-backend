@@ -26,6 +26,7 @@ export type Env = {
     GITHUB_CLIENT_ID: string;
     GITHUB_CLIENT_SECRET: string;
     MY_BUCKET: R2Bucket;
+    MY_KV: KVNamespace;
   };
 };
 export interface UserAuth {
@@ -37,6 +38,9 @@ export interface UserAuth {
   createdAt: Date;
   updatedAt: Date;
   role: "user" | "admin";
+  banned: boolean;
+  banReason?: string | null | undefined;
+  banExpires?: Date | null | undefined;
 }
 export interface SessionAuth {
   id: string;
