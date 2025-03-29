@@ -23,20 +23,13 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const cacheKey = isFiltered
     ? `resources:${JSON.stringify({ type, category, q, tags })}`
     : "resources";
-  if (!isFiltered) {
-    const cacheData = await c.env.MY_KV.get(cacheKey);
-    if (cacheData) {
-      return c.json(JSON.parse(cacheData), HttpStatusCodes.OK);
-    }
+  const cacheData = await c.env.MY_KV.get(cacheKey);
+  if (cacheData) {
+    return c.json(JSON.parse(cacheData), HttpStatusCodes.OK);
   }
-
-  // const resources = await db.query.resources.findMany({
-  //   orderBy: (resources, { desc }) => desc(resources.createdAt),
-  //   where: (resources, { eq }) => eq(resources.isPublished, true),
-  // });
   const resources = await db.query.resources.findMany({
     orderBy: (resources, { desc }) => desc(resources.createdAt),
-    where: (resources, { and, eq, ilike }) =>
+    where: (resources, { and, eq, inArray }) =>
       and(
         eq(resources.isPublished, true),
         type
@@ -65,11 +58,16 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
     return acc;
   }, {} as Record<string, string[]>);
 
-  const formattedResources = resources.map((resource) => ({
+  let formattedResources = resources.map((resource) => ({
     ...resource,
     tags: resourceTagsMap[resource.id] || [], // Attach tags array
   }));
-
+  if (tags) {
+    const tagArray = tags.split(",").map((tag) => tag.trim().toLowerCase());
+    formattedResources = formattedResources.filter((resource) =>
+      tagArray.every((tag) => resource.tags.includes(tag))
+    );
+  }
   await c.env.MY_KV.put(cacheKey, JSON.stringify(formattedResources), {
     expirationTtl: 60 * 10,
   });
