@@ -180,10 +180,10 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
       HttpStatusCodes.BAD_REQUEST
     );
   }
-  const newImageKey = existingResource?.image
-    ? existingResource.image
-    : resource.image?.name + nanoid(5);
+  let newImageKey = existingResource.image;
+
   if (resource.image) {
+    newImageKey = resource.image.name + nanoid(5);
     if (existingResource.image) {
       await c.env.MY_BUCKET.delete(existingResource.image);
     }

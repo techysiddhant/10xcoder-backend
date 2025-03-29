@@ -28,16 +28,6 @@ export const getAll = createRoute({
   },
 });
 
-const multipartContent = (schema: ZodSchema, description: string) => {
-  return {
-    content: {
-      "multipart/form-data": {
-        schema,
-      },
-    },
-    description,
-  };
-};
 export const create = createRoute({
   path: "/resources",
   method: "post",
@@ -51,7 +41,6 @@ export const create = createRoute({
       },
       description: "The Resource to create",
     },
-    // body: multipartContent(insertResourceSchema, "The Resource to create"),
   },
   responses: {
     [HttpStatusCodes.CREATED]: jsonContent(
@@ -64,7 +53,7 @@ export const create = createRoute({
     ),
     [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Bad Request"
+      "Internal Server Error"
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
