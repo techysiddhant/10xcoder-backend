@@ -5,6 +5,7 @@ import { admin, openAPI, username } from "better-auth/plugins";
 import { createDB } from "@/db";
 import { sendEmail } from "./resend";
 import type { Env } from "./types";
+import { role } from "better-auth/plugins/access";
 export function initAuth(env: Env["Bindings"]) {
   const db = createDB(env);
   return betterAuth({
@@ -22,6 +23,14 @@ export function initAuth(env: Env["Bindings"]) {
       cookieCache: {
         enabled: true,
         maxAge: 5 * 60, // Cache duration in seconds
+      },
+    },
+    user: {
+      additionalFields: {
+        role: {
+          type: "string",
+          default: "user",
+        },
       },
     },
     emailAndPassword: {
