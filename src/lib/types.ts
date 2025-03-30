@@ -27,7 +27,6 @@ export type Env = {
     GITHUB_CLIENT_SECRET: string;
     MY_BUCKET: R2Bucket;
     MY_KV: KVNamespace;
-    MY_RATE_LIMITER: any;
     UPSTASH_REDIS_REST_URL: string;
     UPSTASH_REDIS_REST_TOKEN: string;
   };

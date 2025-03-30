@@ -9,19 +9,19 @@
   // "vars": {
   //   "MY_VAR": "my-variable"
   // },
-  "unsafe": {
-    "bindings": [
-      {
-        "name": "MY_RATE_LIMITER",
-        "type": "ratelimit",
-        "namespace_id": "1001",
-        "simple": {
-          "limit": 10,
-          "period": 60
-        }
-      }
-    ]
-  },
+  // "unsafe": {
+  //   "bindings": [
+  //     {
+  //       "name": "MY_RATE_LIMITER",
+  //       "type": "ratelimit",
+  //       "namespace_id": "1001",
+  //       "simple": {
+  //         "limit": 10,
+  //         "period": 60
+  //       }
+  //     }
+  //   ]
+  // },
   "kv_namespaces": [
     {
       "binding": "MY_KV",
