@@ -3,10 +3,12 @@ import configureOpenAPI from "./lib/configure-open-api";
 import createApp from "./lib/create-app";
 import index from "@/routes/index.route";
 import resources from "@/routes/resources/resources.index";
+import categories from "@/routes/categories/categories.index";
+import tags from "@/routes/tags/tags.index";
 import { auth } from "./middlewares/auth";
 const app = createApp();
 configureOpenAPI(app);
-const routes = [index, resources];
+const routes = [index, resources, categories, tags];
 app.on(["POST", "GET"], "/api/auth/*", (c) => {
   if (c.req.path === "/api/auth/use-session") {
     const session = c.get("session");
