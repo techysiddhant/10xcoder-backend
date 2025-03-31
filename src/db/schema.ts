@@ -147,7 +147,8 @@ export const resourceUpvotesIndexes = sql`
   CREATE INDEX idx_upvotes_resource_id ON resource_upvotes(resource_id);
   CREATE INDEX idx_upvotes_user_id ON resource_upvotes(user_id);
 `;
-
+export const selectCategorySchema = createSelectSchema(categories);
+export const selectTagSchema = createSelectSchema(tags);
 export const selectResourceSchema = createSelectSchema(resources).extend({
   tags: z.array(z.string()),
 });
