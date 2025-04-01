@@ -164,7 +164,6 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       eq(resourceTags.resourceId, newResource.id),
     columns: { tagName: true }, // Fetch only the tag names
   });
-  await c.env.MY_KV.delete("resources");
   return c.json(
     { ...newResource, tags: associatedTags.map((t) => t.tagName) },
     HttpStatusCodes.CREATED
@@ -349,6 +348,9 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
     columns: { tagName: true }, // Fetch only the tag names
   });
   await c.env.MY_KV.delete("resources");
+  await c.env.MY_KV.delete(`resource-${params.id}`);
+  await c.env.MY_KV.delete("categories");
+  await c.env.MY_KV.delete("tags");
   return c.json(
     { ...resource, tags: associatedTags.map((t) => t.tagName) },
     HttpStatusCodes.OK
