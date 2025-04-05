@@ -158,8 +158,24 @@ export const publish = createRoute({
     ),
   },
 });
+export const getUsersResources = createRoute({
+  path: "/users/resources",
+  method: "get",
+  tags,
+  responses: {
+    [HttpStatusCodes.OK]: jsonContent(
+      z.array(selectResourceSchema),
+      "The List of Resources by the user"
+    ),
+    [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Unauthorized"
+    ),
+  },
+});
 export type GetAllRoute = typeof getAll;
 export type CreateRoute = typeof create;
 export type GetOne = typeof getOne;
 export type PatchRoute = typeof patch;
 export type PublishRoute = typeof publish;
+export type GetUsersResources = typeof getUsersResources;

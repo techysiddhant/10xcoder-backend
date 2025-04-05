@@ -9,6 +9,7 @@ import type {
   CreateRoute,
   GetAllRoute,
   GetOne,
+  GetUsersResources,
   PatchRoute,
   PublishRoute,
 } from "./resources.routes";
@@ -361,4 +362,47 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
     { ...resource, tags: associatedTags.map((t) => t.tagName) },
     HttpStatusCodes.OK
   );
+};
+export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
+  c
+) => {
+  const db = createDB(c.env);
+  const user = c.get("user");
+  if (!user || !user.id) {
+    return c.json(
+      { message: "User not authenticated", success: false },
+      HttpStatusCodes.UNAUTHORIZED
+    );
+  }
+  const cacheKey = `resources:${user.id}`;
+  const cacheData = await c.env.MY_KV.get(cacheKey);
+  if (cacheData) {
+    return c.json(JSON.parse(cacheData), HttpStatusCodes.OK);
+  }
+  const resources = await db.query.resources.findMany({
+    where: (resources, { eq }) => eq(resources.userId, user.id),
+    orderBy: (resources, { desc }) => desc(resources.createdAt),
+  });
+  const resourceTags = await db.query.resourceTags.findMany({
+    where: (resourceTags, { inArray }) =>
+      inArray(
+        resourceTags.resourceId,
+        resources.map((r) => r.id)
+      ),
+  });
+  // ✅ Merge tags into resources
+  const resourceTagsMap = resourceTags.reduce((acc, tag) => {
+    if (!acc[tag.resourceId]) acc[tag.resourceId] = [];
+    acc[tag.resourceId].push(tag.tagName);
+    return acc;
+  }, {} as Record<string, string[]>);
+
+  let formattedResources = resources.map((resource) => ({
+    ...resource,
+    tags: resourceTagsMap[resource.id] || [], // Attach tags array
+  }));
+  await c.env.MY_KV.put(cacheKey, JSON.stringify(formattedResources), {
+    expirationTtl: 60 * 10,
+  });
+  return c.json(formattedResources, HttpStatusCodes.OK);
 };
