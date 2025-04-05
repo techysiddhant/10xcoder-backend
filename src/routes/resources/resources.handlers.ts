@@ -12,6 +12,15 @@ import type {
   PatchRoute,
   PublishRoute,
 } from "./resources.routes";
+import { Context } from "hono";
+async function invalidateCaches(c: Context, resourceId: string) {
+  await Promise.all([
+    c.env.MY_KV.delete("resources"),
+    c.env.MY_KV.delete(`resource-${resourceId}`),
+    c.env.MY_KV.delete("categories"),
+    c.env.MY_KV.delete("tags"),
+  ]);
+}
 export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   let type = c.req.query("type");
   const category = c.req.query("category");
@@ -164,7 +173,6 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       eq(resourceTags.resourceId, newResource.id),
     columns: { tagName: true }, // Fetch only the tag names
   });
-  await c.env.MY_KV.delete("resources");
   return c.json(
     { ...newResource, tags: associatedTags.map((t) => t.tagName) },
     HttpStatusCodes.CREATED
@@ -348,7 +356,7 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
     where: (resourceTags, { eq }) => eq(resourceTags.resourceId, resource.id),
     columns: { tagName: true }, // Fetch only the tag names
   });
-  await c.env.MY_KV.delete("resources");
+  await invalidateCaches(c, params.id);
   return c.json(
     { ...resource, tags: associatedTags.map((t) => t.tagName) },
     HttpStatusCodes.OK
