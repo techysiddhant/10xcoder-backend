@@ -26,6 +26,7 @@ app.on(["POST", "GET"], "/api/auth/*", (c) => {
 });
 app.on(["POST"], "/resources", auth);
 app.on(["PATCH"], "/resource/:id", auth);
+app.on(["GET"], "/users/resources", auth);
 routes.forEach((route) => {
   app.route("/", route);
 });
