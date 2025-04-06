@@ -19,7 +19,7 @@ export default function createApp() {
     cors({
       origin: "http://localhost:3000",
       allowHeaders: ["Content-Type", "Authorization"],
-      allowMethods: ["POST", "GET", "OPTIONS", "PUT"],
+      allowMethods: ["POST", "GET", "OPTIONS", "PUT", "PATCH"],
       exposeHeaders: ["Content-Length"],
       maxAge: 600,
       credentials: true,
