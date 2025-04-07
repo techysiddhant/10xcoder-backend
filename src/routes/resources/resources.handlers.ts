@@ -2,7 +2,13 @@ import { and, eq, inArray, is, like, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import { createDB } from "@/db";
-import { categories, resources, resourceTags, tags } from "@/db/schema";
+import {
+  categories,
+  resources,
+  resourceTags,
+  resourceUpvotes,
+  tags,
+} from "@/db/schema";
 import { isResourceType, isValidImageType } from "@/lib/utils";
 import type { AppRouteHandler } from "@/lib/types";
 import type {
@@ -12,8 +18,10 @@ import type {
   GetUsersResources,
   PatchRoute,
   PublishRoute,
+  UpvoteRoute,
 } from "./resources.routes";
 import { Context } from "hono";
+import { redisPublisher } from "@/lib/redis";
 async function invalidateCaches(c: Context, resourceId: string) {
   await Promise.all([
     c.env.MY_KV.delete("resources"),
@@ -405,4 +413,46 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
     expirationTtl: 60 * 10,
   });
   return c.json(formattedResources, HttpStatusCodes.OK);
+};
+
+export const upvote: AppRouteHandler<UpvoteRoute> = async (c) => {
+  const resourceId = c.req.param("id");
+  const user = c.get("user");
+  const red = redisPublisher(c.env); // your Redis client
+
+  if (!user || !user.id) {
+    return c.json(
+      { message: "User not authenticated", success: false },
+      HttpStatusCodes.UNAUTHORIZED
+    );
+  }
+
+  const upvoteKey = `upvote:user:${user.id}:resource:${resourceId}`;
+  const countKey = `upvote:count:${resourceId}`;
+
+  const alreadyUpvoted = await red.get(upvoteKey);
+
+  let newCount: number;
+
+  if (alreadyUpvoted) {
+    await red.del(upvoteKey);
+    newCount = await red.decr(countKey);
+  } else {
+    await red.set(upvoteKey, "1", "EX", 60 * 60 * 24 * 7);
+    newCount = await red.incr(countKey);
+  }
+
+  // Publish the upvote event
+  await red.publish(
+    "upvote-events",
+    JSON.stringify({ resourceId, count: newCount })
+  );
+
+  // Queue it for background DB persistence (e.g., with queue)
+  // TODO: Add this to a queue service like QStash/Cloudflare Queue or custom cron job
+
+  return c.json(
+    { success: true, resourceId, count: newCount },
+    HttpStatusCodes.OK
+  );
 };

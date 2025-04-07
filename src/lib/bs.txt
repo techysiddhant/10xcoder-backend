@@ -1,0 +1,33 @@
+export const syncUpvotesToDB = async (env: Env) => {
+    const db = createDB(env);
+    const red = redis(env);
+  
+    // Get all resource keys that may have upvotes
+    const keys = await red.keys("upvote:sync:*");
+  
+    for (const key of keys) {
+      const resourceId = key.split(":")[2];
+      const userUpvotes = await red.hgetall<{ [userId: string]: string }>(key);
+  
+      // First, delete old upvote records for this resource
+      await db.delete(resourceUpvotes).where(eq(resourceUpvotes.resourceId, resourceId));
+  
+      const records = Object.entries(userUpvotes).map(([userId]) => ({
+        userId,
+        resourceId,
+      }));
+  
+      if (records.length) {
+        await db.insert(resourceUpvotes).values(records);
+      }
+  
+      // Optional: update the main resource upvoteCount if you want
+      await db
+        .update(resources)
+        .set({ upvoteCount: records.length })
+        .where(eq(resources.id, resourceId));
+  
+      await red.del(key); // Clear sync buffer
+    }
+  };
+  

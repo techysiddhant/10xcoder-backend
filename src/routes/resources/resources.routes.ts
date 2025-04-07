@@ -159,7 +159,7 @@ export const publish = createRoute({
   },
 });
 export const getUsersResources = createRoute({
-  path: "/users/resources",
+  path: "/user/resources",
   method: "get",
   tags,
   responses: {
@@ -173,9 +173,29 @@ export const getUsersResources = createRoute({
     ),
   },
 });
+export const upvote = createRoute({
+  path: "/resource/upvote/{id}",
+  method: "patch",
+  tags,
+  responses: {
+    [HttpStatusCodes.OK]: jsonContent(
+      z.object({
+        count: z.number(),
+        success: z.boolean().default(false),
+        resourceId: z.string(),
+      }),
+      "The upvote was successful"
+    ),
+    [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Unauthorized"
+    ),
+  },
+});
 export type GetAllRoute = typeof getAll;
 export type CreateRoute = typeof create;
 export type GetOne = typeof getOne;
 export type PatchRoute = typeof patch;
 export type PublishRoute = typeof publish;
 export type GetUsersResources = typeof getUsersResources;
+export type UpvoteRoute = typeof upvote;

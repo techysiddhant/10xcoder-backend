@@ -7,6 +7,7 @@ const router = createRouter()
   .openapi(routes.getOne, handlers.getOne)
   .openapi(routes.patch, handlers.patch)
   .openapi(routes.publish, handlers.publish)
-  .openapi(routes.getUsersResources, handlers.getUsersResources);
+  .openapi(routes.getUsersResources, handlers.getUsersResources)
+  .openapi(routes.upvote, handlers.upvote);
 
 export default router;
