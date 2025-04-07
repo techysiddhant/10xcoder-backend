@@ -1,19 +1,16 @@
 import { Resend } from "resend";
-import { Env, UserAuth } from "./types";
+import { UserAuth } from "./types";
 import { createElement } from "react";
 import { VerificationEmail } from "@/emails/verification-email";
 import { ResetEmail } from "@/emails/reset-email";
+import env from "./env";
 type EmailData = {
   to: string;
   subject: string;
   url: string;
   user: UserAuth;
 };
-export const sendEmail = async (
-  env: Env["Bindings"],
-  type: string,
-  emailData: EmailData
-) => {
+export const sendEmail = async (type: string, emailData: EmailData) => {
   const resend = new Resend(env.RESEND_API_KEY);
   try {
     if (type === "verification") {

@@ -58,3 +58,8 @@ export type AppRouteHandler<R extends RouteConfig> = RouteHandler<
   R,
   AppBindings
 >;
+
+export interface ResourceTag {
+  id: string;
+  name: string;
+}

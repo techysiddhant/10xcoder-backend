@@ -4,7 +4,7 @@ import { AppBindings } from "./types";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { defaultHook } from "stoker/openapi";
 import { cors } from "hono/cors";
-import { initAuth } from "./auth";
+import { auth } from "./auth";
 import { rateLimiter } from "hono-rate-limiter";
 import { RedisStore } from "@hono-rate-limiter/redis";
 import { redis } from "./redis";
@@ -32,12 +32,11 @@ export default function createApp() {
       limit: 1, // Limit each IP to 100 requests per `window` (here, per 15 minutes).
       standardHeaders: "draft-6", // draft-6: `RateLimit-*` headers; draft-7: combined `RateLimit` header
       keyGenerator: (c) => c.req.header("cf-connecting-ip") ?? "", // Method to generate custom identifiers for clients.
-      store: new RedisStore({ client: redis(c.env) }),
+      store: new RedisStore({ client: redis }),
     });
     return next();
   });
   app.use("*", async (c, next) => {
-    const auth = initAuth(c.env);
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     if (!session) {
       c.set("user", null);
