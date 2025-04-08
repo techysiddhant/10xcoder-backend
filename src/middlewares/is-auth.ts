@@ -1,6 +1,6 @@
 import { createMiddleware } from "hono/factory";
 import * as HttpStatusCodes from "stoker/http-status-codes";
-export const auth = createMiddleware(async (c, next) => {
+export const isAuth = createMiddleware(async (c, next) => {
   const user = c.get("user");
   if (!user) {
     return c.json(

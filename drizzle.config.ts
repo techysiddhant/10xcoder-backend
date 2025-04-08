@@ -41,39 +41,52 @@
 //       }),
 // });
 
-import { config } from "dotenv";
+// import { config } from "dotenv";
+// import { defineConfig } from "drizzle-kit";
+
+// config({ path: ".dev.vars" });
+
+// export default process.env.LOCAL_DB_PATH
+//   ? {
+//       schema: "./src/db/schema.ts",
+//       dialect: "sqlite",
+//       dbCredentials: {
+//         url: process.env.LOCAL_DB_PATH,
+//       },
+//     }
+//   : defineConfig({
+//       schema: "./src/db/schema.ts",
+//       dialect: "sqlite",
+//       out: "./drizzle",
+//       driver: "d1-http",
+//       dbCredentials: {
+//         accountId:
+//           process.env.CLOUDFLARE_ACCOUNT_ID ||
+//           (() => {
+//             throw new Error("CLOUDFLARE_ACCOUNT_ID is required");
+//           })(),
+//         databaseId:
+//           process.env.CLOUDFLARE_DATABASE_ID ||
+//           (() => {
+//             throw new Error("CLOUDFLARE_DATABASE_ID is required");
+//           })(),
+//         token:
+//           process.env.CLOUDFLARE_D1_TOKEN ||
+//           (() => {
+//             throw new Error("CLOUDFLARE_D1_TOKEN is required");
+//           })(),
+//       },
+//     });
+
+import env from "@/lib/env";
+import "dotenv/config";
 import { defineConfig } from "drizzle-kit";
 
-config({ path: ".dev.vars" });
-
-export default process.env.LOCAL_DB_PATH
-  ? {
-      schema: "./src/db/schema.ts",
-      dialect: "sqlite",
-      dbCredentials: {
-        url: process.env.LOCAL_DB_PATH,
-      },
-    }
-  : defineConfig({
-      schema: "./src/db/schema.ts",
-      dialect: "sqlite",
-      out: "./drizzle",
-      driver: "d1-http",
-      dbCredentials: {
-        accountId:
-          process.env.CLOUDFLARE_ACCOUNT_ID ||
-          (() => {
-            throw new Error("CLOUDFLARE_ACCOUNT_ID is required");
-          })(),
-        databaseId:
-          process.env.CLOUDFLARE_DATABASE_ID ||
-          (() => {
-            throw new Error("CLOUDFLARE_DATABASE_ID is required");
-          })(),
-        token:
-          process.env.CLOUDFLARE_D1_TOKEN ||
-          (() => {
-            throw new Error("CLOUDFLARE_D1_TOKEN is required");
-          })(),
-      },
-    });
+export default defineConfig({
+  out: "./src/db/drizzle",
+  schema: "./src/db/schema.ts",
+  dialect: "postgresql",
+  dbCredentials: {
+    url: env.DATABASE_URL,
+  },
+});

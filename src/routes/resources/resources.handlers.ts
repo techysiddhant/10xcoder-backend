@@ -1,16 +1,16 @@
-import { and, eq, inArray, is, like, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import * as HttpStatusCodes from "stoker/http-status-codes";
-import { createDB } from "@/db";
 import {
   categories,
   resources,
   resourceTags,
+  resourceToTag,
   resourceUpvotes,
-  tags,
+  user,
 } from "@/db/schema";
-import { isResourceType, isValidImageType } from "@/lib/utils";
-import type { AppRouteHandler } from "@/lib/types";
+import { isResourceType } from "@/lib/utils";
+import type { AppRouteHandler, ResourceTag } from "@/lib/types";
 import type {
   CreateRoute,
   GetAllRoute,
@@ -18,78 +18,93 @@ import type {
   GetUsersResources,
   PatchRoute,
   PublishRoute,
-  UpvoteRoute,
 } from "./resources.routes";
-import { Context } from "hono";
-import { redisPublisher } from "@/lib/redis";
-async function invalidateCaches(c: Context, resourceId: string) {
-  await Promise.all([
-    c.env.MY_KV.delete("resources"),
-    c.env.MY_KV.delete(`resource-${resourceId}`),
-    c.env.MY_KV.delete("categories"),
-    c.env.MY_KV.delete("tags"),
-  ]);
-}
-export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
-  let type = c.req.query("type");
-  const category = c.req.query("category");
-  const q = c.req.query("q");
-  const tags = c.req.query("tags"); // tags like nextjs,reactjs, in this format
-  const db = createDB(c.env);
-  const isFiltered = type || category || q || tags;
-  type = type && isResourceType(type) ? type : undefined;
-  const cacheKey = isFiltered
-    ? `resources:${JSON.stringify({ type, category, q, tags })}`
-    : "resources";
-  const cacheData = await c.env.MY_KV.get(cacheKey);
-  if (cacheData) {
-    return c.json(JSON.parse(cacheData), HttpStatusCodes.OK);
-  }
-  const resources = await db.query.resources.findMany({
-    orderBy: (resources, { desc }) => desc(resources.createdAt),
-    where: (resources, { and, eq, inArray }) =>
-      and(
-        eq(resources.isPublished, true),
-        type
-          ? eq(resources.resourceType, type as "video" | "article")
-          : undefined,
-        category ? eq(resources.categoryName, category) : undefined,
-        q
-          ? like(
-              sql`LOWER(${resources.title})`,
-              sql.join([`%${q.toLowerCase()}%`])
-            )
-          : undefined
-      ),
-  });
-  const resourceTags = await db.query.resourceTags.findMany({
-    where: (resourceTags, { inArray }) =>
-      inArray(
-        resourceTags.resourceId,
-        resources.map((r) => r.id)
-      ),
-  });
-  // ✅ Merge tags into resources
-  const resourceTagsMap = resourceTags.reduce((acc, tag) => {
-    if (!acc[tag.resourceId]) acc[tag.resourceId] = [];
-    acc[tag.resourceId].push(tag.tagName);
-    return acc;
-  }, {} as Record<string, string[]>);
+import { redis } from "@/lib/redis";
+import db from "@/db";
 
-  let formattedResources = resources.map((resource) => ({
-    ...resource,
-    tags: resourceTagsMap[resource.id] || [], // Attach tags array
-  }));
-  if (tags) {
-    const tagArray = tags.split(",").map((tag) => tag.trim().toLowerCase());
-    formattedResources = formattedResources.filter((resource) =>
-      tagArray.every((tag) => resource.tags.includes(tag))
-    );
+export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
+  const resourceType = c.req.query("resourceType") ?? "";
+  const categoryName = c.req.query("category") ?? "";
+  const tagsParam = c.req.query("tags") ?? "";
+
+  const tags = tagsParam
+    .split(",")
+    .map((tag: string) => tag.trim())
+    .filter(Boolean);
+
+  const cacheKey = `resources:${resourceType}:${categoryName}:${tags
+    .sort()
+    .join(",")}`;
+
+  // Check Redis cache
+  const cached = await redis.get(cacheKey);
+  if (cached) {
+    const data = typeof cached === "string" ? JSON.parse(cached) : null;
+    return c.json(data, HttpStatusCodes.OK);
   }
-  await c.env.MY_KV.put(cacheKey, JSON.stringify(formattedResources), {
-    expirationTtl: 60 * 10,
-  });
-  return c.json(formattedResources, HttpStatusCodes.OK);
+
+  // Get filtered resources
+  const filteredResources = await db
+    .selectDistinctOn([resources.id], {
+      id: resources.id,
+      title: resources.title,
+      description: resources.description,
+      url: resources.url,
+      image: resources.image,
+      resourceType: resources.resourceType,
+      categoryId: resources.categoryId,
+      createdAt: resources.createdAt,
+      updatedAt: resources.updatedAt,
+    })
+    .from(resources)
+    .innerJoin(categories, eq(resources.categoryId, categories.id))
+    .leftJoin(resourceToTag, eq(resourceToTag.resourceId, resources.id))
+    .leftJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
+    .where(
+      and(
+        ...(resourceType && isResourceType(resourceType)
+          ? [eq(resources.resourceType, resourceType)]
+          : []),
+        ...(categoryName ? [eq(categories.name, categoryName)] : []),
+        ...(tags.length > 0 ? [inArray(resourceTags.name, tags)] : [])
+      )
+    )
+    .groupBy(resources.id)
+    .having(
+      tags.length > 0
+        ? sql`COUNT(DISTINCT ${resourceTags.name}) = ${tags.length}`
+        : undefined
+    );
+
+  const resourceIds = filteredResources.map((r) => r.id);
+
+  // Fetch all tags for these resources in one go
+  const tagRows = await db
+    .select({
+      resourceId: resourceToTag.resourceId,
+      tagName: resourceTags.name,
+    })
+    .from(resourceToTag)
+    .innerJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
+    .where(inArray(resourceToTag.resourceId, resourceIds));
+
+  // Group tags by resourceId
+  const tagMap = new Map<string, string[]>();
+  for (const { resourceId, tagName } of tagRows) {
+    if (!tagMap.has(resourceId)) tagMap.set(resourceId, []);
+    tagMap.get(resourceId)!.push(tagName);
+  }
+
+  // Attach tags to each resource
+  const finalData = filteredResources.map((res) => ({
+    ...res,
+    tags: tagMap.get(res.id) ?? [],
+  }));
+
+  // Cache for 10 min
+  await redis.set(cacheKey, JSON.stringify(finalData), { ex: 600 });
+
+  return c.json(finalData, HttpStatusCodes.OK);
 };
 export const create: AppRouteHandler<CreateRoute> = async (c) => {
   const {
@@ -99,12 +114,13 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
     url,
     image,
     resourceType,
-    categoryName,
+    categoryId,
   } = c.req.valid("form");
+
   const tagNames = tagsArray
     .split(",")
-    .map((tag) => tag.trim().toLowerCase()) // Normalize to lowercase
-    .filter((tag) => tag.length > 0);
+    .map((tag: string) => tag.trim().toLowerCase())
+    .filter((tag: string) => tag.length > 0);
 
   const user = c.get("user");
 
@@ -121,224 +137,263 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       HttpStatusCodes.BAD_REQUEST
     );
   }
-  if (image && !isValidImageType(image)) {
-    return c.json(
-      { message: "Invalid image type", success: false },
-      HttpStatusCodes.BAD_REQUEST
-    );
-  }
-
-  const db = createDB(c.env);
-  let imageKey;
-  if (image) {
-    imageKey = image.name + nanoid(5);
-    const imageR2 = await c.env.MY_BUCKET.put(imageKey, image);
-    if (!imageR2) {
-      return c.json(
-        { message: "Failed to upload image", success: false },
-        HttpStatusCodes.INTERNAL_SERVER_ERROR
-      );
-    }
-  }
-
-  // Ensure category exists
-  await db
-    .insert(categories)
-    .values({ name: categoryName.toLowerCase() })
-    .onConflictDoNothing();
-
-  // Create new resource
-  const [newResource] = await db
+  const [createdResource] = await db
     .insert(resources)
     .values({
-      title: title,
-      description: description,
-      url: url,
-      image: imageKey,
+      title,
+      description,
+      url,
+      image: String(image),
       resourceType,
-      categoryName: categoryName.toLowerCase(),
-      id: nanoid(),
+      categoryId,
+      upvoteCount: 0,
       userId: user.id,
     })
     .returning();
+  const existingTags = await db
+    .select()
+    .from(resourceTags)
+    .where(inArray(resourceTags.name, tagNames));
 
-  // Insert tags & resource-tag mapping
-  await Promise.all(
-    tagNames.map(async (tagName) => {
-      await db.insert(tags).values({ name: tagName }).onConflictDoNothing();
-      await db
-        .insert(resourceTags)
-        .values({
-          resourceId: newResource.id,
-          tagName,
-        })
-        .onConflictDoNothing();
-    })
-  );
+  const existingTagMap = new Map(existingTags.map((tag) => [tag.name, tag.id]));
 
-  // Fetch associated tags for the response
-  const associatedTags = await db.query.resourceTags.findMany({
-    where: (resourceTags, { eq }) =>
-      eq(resourceTags.resourceId, newResource.id),
-    columns: { tagName: true }, // Fetch only the tag names
-  });
+  const newTagNames = tagNames.filter((name) => !existingTagMap.has(name));
+  let newTags: ResourceTag[] = [];
+  if (newTagNames.length > 0) {
+    newTags = await db
+      .insert(resourceTags)
+      .values(newTagNames.map((name) => ({ name })))
+      .returning();
+  }
+  const allTagIds = [
+    ...existingTags.map((tag) => tag.id),
+    ...newTags.map((tag) => tag.id),
+  ];
+  // 5. Create resource-to-tag relationships
+  if (allTagIds.length > 0) {
+    await db.insert(resourceToTag).values(
+      allTagIds.map((tagId) => ({
+        resourceId: createdResource.id,
+        tagId,
+      }))
+    );
+  }
+  redis.del("user-resources:" + user.id);
   return c.json(
-    { ...newResource, tags: associatedTags.map((t) => t.tagName) },
+    { success: true, resourceId: createdResource.id },
     HttpStatusCodes.CREATED
   );
 };
 
 export const getOne: AppRouteHandler<GetOne> = async (c) => {
-  const params = c.req.param();
-  const cacheData = await c.env.MY_KV.get(`resource-${params.id}`);
-  if (cacheData) {
-    return c.json(JSON.parse(cacheData), HttpStatusCodes.OK);
+  const { id } = c.req.param(); // assumes /resource/:id
+  const userLogged = c.get("user");
+  const cacheKey = `resource:${id}:user:${userLogged?.id || "guest"}`;
+  const cached = await redis.get(cacheKey);
+  if (cached) {
+    const data = typeof cached === "string" ? JSON.parse(cached) : null;
+    return c.json(data, HttpStatusCodes.OK);
   }
-  const db = createDB(c.env);
-  const resource = await db.query.resources.findFirst({
-    where: (resources, { eq }) =>
-      eq(resources.id, params.id) && eq(resources.isPublished, true),
-  });
+  const [resource] = await db
+    .select({
+      id: resources.id,
+      title: resources.title,
+      description: resources.description,
+      url: resources.url,
+      image: resources.image,
+      resourceType: resources.resourceType,
+      upvoteCount: resources.upvoteCount,
+      createdAt: resources.createdAt,
+      updatedAt: resources.updatedAt,
+      categoryName: categories.name,
+      creator: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+      },
+    })
+    .from(resources)
+    .innerJoin(categories, eq(resources.categoryId, categories.id))
+    .innerJoin(
+      user,
+      userLogged?.id ? eq(resources.userId, userLogged.id) : undefined
+    )
+    .where(and(eq(resources.id, id), eq(resources.isPublished, true)));
+
   if (!resource) {
     return c.json(
-      { message: "Resource not found", success: false },
+      { success: false, message: "Resource not found" },
       HttpStatusCodes.NOT_FOUND
     );
   }
-  const associatedTags = await db.query.resourceTags.findMany({
-    where: (resourceTags, { eq }) => eq(resourceTags.resourceId, resource.id),
-    columns: { tagName: true }, // Fetch only the tag names
-  });
+  const tagRows = await db
+    .select({
+      tagName: resourceTags.name,
+    })
+    .from(resourceToTag)
+    .innerJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
+    .where(eq(resourceToTag.resourceId, id));
 
-  await c.env.MY_KV.put(
-    `resource-${params.id}`,
-    JSON.stringify({ ...resource, tags: associatedTags.map((t) => t.tagName) }),
-    { expirationTtl: 60 * 10 }
-  );
-  return c.json(
-    { ...resource, tags: associatedTags.map((t) => t.tagName) },
-    HttpStatusCodes.OK
-  );
+  const tags = tagRows.map((row) => row.tagName);
+  let isVoted = false;
+  if (user?.id) {
+    const vote = await db
+      .select({ id: resourceUpvotes.userId })
+      .from(resourceUpvotes)
+      .where(
+        and(
+          eq(resourceUpvotes.resourceId, id),
+          eq(resourceUpvotes.userId, user.id)
+        )
+      )
+      .limit(1);
+    isVoted = vote.length > 0;
+  }
+  const finalData = {
+    ...resource,
+    tags,
+    isVoted,
+  };
+
+  await redis.set(cacheKey, JSON.stringify(finalData), { ex: 600 });
+
+  return c.json(finalData, HttpStatusCodes.OK);
 };
 
 export const patch: AppRouteHandler<PatchRoute> = async (c) => {
-  const params = c.req.param();
-  const resource = c.req.valid("form");
-  const db = createDB(c.env);
-  const existingResource = await db.query.resources.findFirst({
-    where: (resources, { eq }) => eq(resources.id, params.id),
-  });
-
-  if (!existingResource) {
+  const { id } = c.req.param();
+  // const resource = c.req.valid("form");
+  const userLogged = c.get("user");
+  if (!userLogged?.id) {
     return c.json(
-      { message: "Resource not found", success: false },
+      { success: false, message: "Unauthorized" },
+      HttpStatusCodes.UNAUTHORIZED
+    );
+  }
+  const {
+    title,
+    description,
+    url,
+    image,
+    resourceType,
+    categoryId,
+    tags: tagsString,
+  } = c.req.valid("form");
+  const tagNames = (tagsString ?? "")
+    .split(",")
+    .map((tag: string) => tag.trim().toLowerCase())
+    .filter((tag: string) => tag.length > 0);
+  const [existing] = await db
+    .select()
+    .from(resources)
+    .where(and(eq(resources.id, id), eq(resources.userId, userLogged.id)));
+
+  if (!existing) {
+    return c.json(
+      { success: false, message: "Resource not found or not yours" },
       HttpStatusCodes.NOT_FOUND
     );
   }
-  if (resource.image && isValidImageType(resource.image)) {
-    return c.json(
-      { message: "Invalid image type", success: false },
-      HttpStatusCodes.BAD_REQUEST
-    );
-  }
-  let newImageKey = existingResource.image;
+  // if (resource.image && isValidImageType(resource.image)) {
+  //   return c.json(
+  //     { message: "Invalid image type", success: false },
+  //     HttpStatusCodes.BAD_REQUEST
+  //   );
+  // }
+  // let newImageKey = existingResource.image;
 
-  if (resource.image) {
-    newImageKey = resource.image.name + nanoid(5);
-    if (existingResource.image) {
-      await c.env.MY_BUCKET.delete(existingResource.image);
-    }
-    const imageR2 = await c.env.MY_BUCKET.put(newImageKey, resource.image!);
-    if (!imageR2) {
-      return c.json(
-        { message: "Failed to upload image", success: false },
-        HttpStatusCodes.INTERNAL_SERVER_ERROR
-      );
-    }
-  }
-
+  // if (resource.image) {
+  //   newImageKey = resource.image.name + nanoid(5);
+  //   if (existingResource.image) {
+  //     await c.env.MY_BUCKET.delete(existingResource.image);
+  //   }
+  //   const imageR2 = await c.env.MY_BUCKET.put(newImageKey, resource.image!);
+  //   if (!imageR2) {
+  //     return c.json(
+  //       { message: "Failed to upload image", success: false },
+  //       HttpStatusCodes.INTERNAL_SERVER_ERROR
+  //     );
+  //   }
+  // }
   await db
-    .insert(categories)
-    .values({ name: resource.categoryName! })
-    .onConflictDoNothing();
-  const [updatedResource] = await db
     .update(resources)
     .set({
-      title: resource.title,
-      description: resource.description,
-      url: resource.url,
-      image: newImageKey,
-      resourceType: resource.resourceType,
-      categoryName: resource.categoryName,
+      title,
+      description,
+      url,
+      image: String(image),
+      resourceType,
+      categoryId,
+      updatedAt: new Date(),
     })
-    .where(eq(resources.id, params.id))
-    .returning();
-  if (!updatedResource) {
-    return c.json(
-      { message: "Failed to update resource", success: false },
-      HttpStatusCodes.INTERNAL_SERVER_ERROR
-    );
-  }
-  if (resource.tags) {
-    const newTags = resource.tags
-      .split(",")
-      .map((tag) => tag.trim().toLowerCase()) // Normalize tags
-      .filter((tag) => tag.length > 0);
+    .where(eq(resources.id, id));
+  // await db
+  //   .insert(categories)
+  //   .values({ name: resource.categoryName! })
+  //   .onConflictDoNothing();
+  // const [updatedResource] = await db
+  //   .update(resources)
+  //   .set({
+  //     title: resource.title,
+  //     description: resource.description,
+  //     url: resource.url,
+  //     image: newImageKey,
+  //     resourceType: resource.resourceType,
+  //     categoryName: resource.categoryName,
+  //   })
+  //   .where(eq(resources.id, params.id))
+  //   .returning();
+  const existingTags = await db
+    .select()
+    .from(resourceTags)
+    .where(inArray(resourceTags.name, tagNames));
 
-    const existingTags = await db.query.resourceTags.findMany({
-      where: (resourceTags, { eq }) => eq(resourceTags.resourceId, params.id),
-    });
-    const existingTagNames = existingTags.map((tag) => tag.tagName);
-    const tagsToRemove = existingTagNames.filter(
-      (tag) => !newTags.includes(tag)
-    );
-
-    if (tagsToRemove.length > 0) {
-      await db
-        .delete(resourceTags)
-        .where(
-          and(
-            eq(resourceTags.resourceId, params.id),
-            inArray(resourceTags.tagName, tagsToRemove)
-          )
-        );
-    }
-
-    await Promise.all(
-      newTags.map(async (tagName) => {
-        await db.insert(tags).values({ name: tagName }).onConflictDoNothing();
-        await db
-          .insert(resourceTags)
-          .values({
-            resourceId: params.id,
-            tagName,
-          })
-          .onConflictDoNothing();
-      })
-    );
-  }
-  const associatedTags = await db.query.resourceTags.findMany({
-    where: (resourceTags, { eq }) =>
-      eq(resourceTags.resourceId, updatedResource.id),
-    columns: { tagName: true }, // Fetch only the tag names
-  });
-  await c.env.MY_KV.put(
-    `resource-${params.id}`,
-    JSON.stringify({
-      ...updatedResource,
-      tags: associatedTags.map((t) => t.tagName),
-    }),
-    { expirationTtl: 60 * 10 }
+  const existingTagNames = existingTags.map((tag) => tag.name);
+  const newTagsToCreate = tagNames.filter(
+    (name) => !existingTagNames.includes(name)
   );
+
+  // b. Insert new tags if any
+  if (newTagsToCreate.length > 0) {
+    await db.insert(resourceTags).values(
+      newTagsToCreate.map((name) => ({
+        id: nanoid(),
+        name,
+      }))
+    );
+  }
+
+  // c. Fetch final tag IDs
+  const finalTags = await db
+    .select()
+    .from(resourceTags)
+    .where(inArray(resourceTags.name, tagNames));
+
+  // d. Delete old tag mappings
+  await db.delete(resourceToTag).where(eq(resourceToTag.resourceId, id));
+
+  // e. Add new tag mappings
+  if (finalTags.length > 0) {
+    await db.insert(resourceToTag).values(
+      finalTags.map((tag) => ({
+        id: nanoid(),
+        resourceId: id,
+        tagId: tag.id,
+      }))
+    );
+  }
+
+  // 4. Invalidate Redis cache
+  await redis.del(`resource:${id}`);
+  await redis.del(`resource:${id}:user:${user.id}`);
   return c.json(
-    { ...updatedResource, tags: associatedTags.map((t) => t.tagName) },
+    { success: true, message: "Resource updated successfully" },
     HttpStatusCodes.OK
   );
 };
 
 export const publish: AppRouteHandler<PublishRoute> = async (c) => {
-  const params = c.req.param();
-  const db = createDB(c.env);
+  const { id } = c.req.param();
   const user = c.get("user");
   if (!user || !user.id || user.role !== "admin") {
     return c.json(
@@ -346,35 +401,38 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
       HttpStatusCodes.UNAUTHORIZED
     );
   }
-  const resource = await db.query.resources.findFirst({
-    where: (resources, { eq }) => eq(resources.id, params.id),
-  });
-  if (!resource) {
+  const [existing] = await db
+    .select({ id: resources.id, isPublished: resources.isPublished })
+    .from(resources)
+    .where(eq(resources.id, id));
+
+  if (!existing) {
     return c.json(
-      { message: "Resource not found", success: false },
+      { success: false, message: "Resource not found" },
       HttpStatusCodes.NOT_FOUND
     );
   }
   await db
     .update(resources)
-    .set({ isPublished: true })
-    .where(eq(resources.id, params.id))
-    .returning();
+    .set({
+      isPublished: existing.isPublished ? false : true,
+      updatedAt: new Date(),
+    })
+    .where(eq(resources.id, id));
 
-  const associatedTags = await db.query.resourceTags.findMany({
-    where: (resourceTags, { eq }) => eq(resourceTags.resourceId, resource.id),
-    columns: { tagName: true }, // Fetch only the tag names
+  // 4. Invalidate cache
+  await redis.del(`resource:${id}`);
+
+  return c.json({
+    success: true,
+    message: `Resource has been ${
+      existing.isPublished ? "Un-published" : "Published"
+    }`,
   });
-  await invalidateCaches(c, params.id);
-  return c.json(
-    { ...resource, tags: associatedTags.map((t) => t.tagName) },
-    HttpStatusCodes.OK
-  );
 };
 export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
   c
 ) => {
-  const db = createDB(c.env);
   const user = c.get("user");
   if (!user || !user.id) {
     return c.json(
@@ -382,77 +440,110 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
       HttpStatusCodes.UNAUTHORIZED
     );
   }
-  const cacheKey = `resources:${user.id}`;
-  const cacheData = await c.env.MY_KV.get(cacheKey);
-  if (cacheData) {
-    return c.json(JSON.parse(cacheData), HttpStatusCodes.OK);
-  }
-  const resources = await db.query.resources.findMany({
-    where: (resources, { eq }) => eq(resources.userId, user.id),
-    orderBy: (resources, { desc }) => desc(resources.createdAt),
-  });
-  const resourceTags = await db.query.resourceTags.findMany({
-    where: (resourceTags, { inArray }) =>
-      inArray(
-        resourceTags.resourceId,
-        resources.map((r) => r.id)
-      ),
-  });
-  // ✅ Merge tags into resources
-  const resourceTagsMap = resourceTags.reduce((acc, tag) => {
-    if (!acc[tag.resourceId]) acc[tag.resourceId] = [];
-    acc[tag.resourceId].push(tag.tagName);
-    return acc;
-  }, {} as Record<string, string[]>);
 
-  let formattedResources = resources.map((resource) => ({
-    ...resource,
-    tags: resourceTagsMap[resource.id] || [], // Attach tags array
+  const cacheKey = `user-resources:${user.id}`;
+
+  // 1. Try Redis cache
+  const cached = await redis.get(cacheKey);
+  if (cached) {
+    const data = typeof cached === "string" ? JSON.parse(cached) : null;
+    if (data) return c.json(data, HttpStatusCodes.OK); // ✅ Only return the array
+  }
+
+  // 2. Fetch user's resources
+  const userResources = await db
+    .select({
+      id: resources.id,
+      title: resources.title,
+      description: resources.description,
+      url: resources.url,
+      image: resources.image,
+      resourceType: resources.resourceType,
+      isPublished: resources.isPublished,
+      createdAt: resources.createdAt,
+      updatedAt: resources.updatedAt,
+      categoryName: categories.name,
+      upvoteCount: resources.upvoteCount,
+    })
+    .from(resources)
+    .leftJoin(categories, eq(resources.categoryId, categories.id))
+    .where(eq(resources.userId, user.id));
+
+  if (userResources.length === 0) {
+    await redis.set(cacheKey, JSON.stringify([]), { ex: 600 });
+    return c.json([], HttpStatusCodes.OK); // ✅ Return empty array
+  }
+
+  // 3. Get tag mappings
+  const resourceIds = userResources.map((r) => r.id);
+  const tagMappings = await db
+    .select({
+      resourceId: resourceToTag.resourceId,
+      tagName: resourceTags.name,
+    })
+    .from(resourceToTag)
+    .leftJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
+    .where(inArray(resourceToTag.resourceId, resourceIds));
+
+  // 4. Group tags by resource
+  const resourceTagMap: Record<string, string[]> = {};
+  for (const { resourceId, tagName } of tagMappings) {
+    if (!resourceTagMap[resourceId]) resourceTagMap[resourceId] = [];
+    if (tagName !== null) {
+      resourceTagMap[resourceId].push(tagName);
+    }
+  }
+
+  // 5. Merge tags into resource objects
+  const result = userResources.map((res) => ({
+    ...res,
+    tags: resourceTagMap[res.id] || [],
   }));
-  await c.env.MY_KV.put(cacheKey, JSON.stringify(formattedResources), {
-    expirationTtl: 60 * 10,
-  });
-  return c.json(formattedResources, HttpStatusCodes.OK);
+
+  // 6. Cache result
+  await redis.set(cacheKey, JSON.stringify(result), { ex: 600 });
+
+  return c.json(result, HttpStatusCodes.OK); // ✅ Final return
 };
 
-export const upvote: AppRouteHandler<UpvoteRoute> = async (c) => {
-  const resourceId = c.req.param("id");
-  const user = c.get("user");
-  const red = redisPublisher(c.env); // your Redis client
+// export const upvote: AppRouteHandler<UpvoteRoute> = async (c) => {
+//   const resourceId = c.req.param("id");
+//   const user = c.get("user");
+//   const red = redisPublisher(c.env); // your Redis client
 
-  if (!user || !user.id) {
-    return c.json(
-      { message: "User not authenticated", success: false },
-      HttpStatusCodes.UNAUTHORIZED
-    );
-  }
+//   if (!user || !user.id) {
+//     return c.json(
+//       { message: "User not authenticated", success: false },
+//       HttpStatusCodes.UNAUTHORIZED
+//     );
+//   }
 
-  const upvoteKey = `upvote:user:${user.id}:resource:${resourceId}`;
-  const countKey = `upvote:count:${resourceId}`;
+//   const upvoteKey = `upvote:user:${user.id}:resource:${resourceId}`;
+//   const countKey = `upvote:count:${resourceId}`;
 
-  const alreadyUpvoted = await red.get(upvoteKey);
+//   const alreadyUpvoted = await red.get(upvoteKey);
 
-  let newCount: number;
+//   let newCount: number;
 
-  if (alreadyUpvoted) {
-    await red.del(upvoteKey);
-    newCount = await red.decr(countKey);
-  } else {
-    await red.set(upvoteKey, "1", "EX", 60 * 60 * 24 * 7);
-    newCount = await red.incr(countKey);
-  }
+//   if (alreadyUpvoted) {
+//     await red.del(upvoteKey);
+//     newCount = await red.decr(countKey);
+//   } else {
+//     await red.set(upvoteKey, "1", "EX", 60 * 60 * 24 * 7);
+//     newCount = await red.incr(countKey);
+//   }
 
-  // Publish the upvote event
-  await red.publish(
-    "upvote-events",
-    JSON.stringify({ resourceId, count: newCount })
-  );
+//   // Publish the upvote event
+//   await red.publish(
+//     "upvote-events",
+//     JSON.stringify({ resourceId, count: newCount })
+//   );
 
-  // Queue it for background DB persistence (e.g., with queue)
-  // TODO: Add this to a queue service like QStash/Cloudflare Queue or custom cron job
+//   // Queue it for background DB persistence (e.g., with queue)
+//   // TODO: Add this to a queue service like QStash/Cloudflare Queue or custom cron job
 
-  return c.json(
-    { success: true, resourceId, count: newCount },
-    HttpStatusCodes.OK
-  );
-};
+//   return c.json(
+//     { success: true, resourceId, count: newCount },
+//     HttpStatusCodes.OK
+//   );
+// };

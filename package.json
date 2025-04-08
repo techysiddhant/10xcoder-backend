@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "tsx watch src/index.ts",
+    "start": "node ./dist/src/index.js",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc && tsc-alias",
     "deploy": "wrangler deploy --minify",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
@@ -15,7 +18,9 @@
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.0",
     "@hono-rate-limiter/redis": "^0.1.4",
+    "@hono/node-server": "^1.14.0",
     "@hono/zod-openapi": "^0.19.2",
+    "@neondatabase/serverless": "^1.0.0",
     "@scalar/hono-api-reference": "^0.7.2",
     "@upstash/redis": "^1.34.6",
     "better-auth": "^1.2.4",
@@ -34,6 +39,7 @@
     "react": "^19.0.0",
     "resend": "^4.1.2",
     "stoker": "^1.4.2",
+    "uploadthing": "^7.6.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
@@ -44,7 +50,9 @@
     "drizzle-kit": "^0.30.5",
     "eslint": "^9.10.0",
     "eslint-plugin-format": "^1.0.1",
+    "tsc-alias": "^1.8.13",
     "tsx": "^4.19.3",
+    "typescript": "^5.8.3",
     "wrangler": "^3.109.2"
   },
   "pnpm": {

@@ -1,13 +1,11 @@
 import { Redis as RedisUpstash } from "@upstash/redis";
 import { Env } from "./types";
 import Redis from "ioredis";
-export const redis = (env: Env["Bindings"]) => {
-  const r = new RedisUpstash({
-    url: env.UPSTASH_REDIS_REST_URL,
-    token: env.UPSTASH_REDIS_REST_TOKEN,
-  });
-  return r;
-};
+import env from "./env";
+export const redis = new RedisUpstash({
+  url: env.UPSTASH_REDIS_REST_URL,
+  token: env.UPSTASH_REDIS_REST_TOKEN,
+});
 
 export const redisPublisher = (env: Env["Bindings"]) => {
   const redisPub = new Redis(env.UPSTASH_REDIS_REST_URL);

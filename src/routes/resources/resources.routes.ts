@@ -39,7 +39,10 @@ export const create = createRoute({
   },
   responses: {
     [HttpStatusCodes.CREATED]: jsonContent(
-      selectResourceSchema,
+      z.object({
+        success: z.boolean().default(true),
+        resourceId: z.string(),
+      }),
       "The created Resource"
     ),
     [HttpStatusCodes.BAD_REQUEST]: jsonContent(
@@ -103,7 +106,10 @@ export const patch = createRoute({
   },
   responses: {
     [HttpStatusCodes.OK]: jsonContent(
-      selectResourceSchema,
+      z.object({
+        success: z.boolean().default(true),
+        message: z.string(),
+      }),
       "The updated Resource"
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
@@ -141,7 +147,10 @@ export const publish = createRoute({
   tags,
   responses: {
     [HttpStatusCodes.OK]: jsonContent(
-      selectResourceSchema,
+      z.object({
+        success: z.boolean().default(true),
+        message: z.string(),
+      }),
       "The requested Resource"
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
@@ -151,10 +160,6 @@ export const publish = createRoute({
     [HttpStatusCodes.NOT_FOUND]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
       "Resource not found"
-    ),
-    [HttpStatusCodes.UNPROCESSABLE_ENTITY]: jsonContent(
-      createErrorSchema(ResourceParamsSchema),
-      "Invalid Id errors"
     ),
   },
 });
@@ -173,29 +178,29 @@ export const getUsersResources = createRoute({
     ),
   },
 });
-export const upvote = createRoute({
-  path: "/resource/upvote/{id}",
-  method: "patch",
-  tags,
-  responses: {
-    [HttpStatusCodes.OK]: jsonContent(
-      z.object({
-        count: z.number(),
-        success: z.boolean().default(false),
-        resourceId: z.string(),
-      }),
-      "The upvote was successful"
-    ),
-    [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
-      z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Unauthorized"
-    ),
-  },
-});
+// export const upvote = createRoute({
+//   path: "/resource/upvote/{id}",
+//   method: "patch",
+//   tags,
+//   responses: {
+//     [HttpStatusCodes.OK]: jsonContent(
+//       z.object({
+//         count: z.number(),
+//         success: z.boolean().default(false),
+//         resourceId: z.string(),
+//       }),
+//       "The upvote was successful"
+//     ),
+//     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
+//       z.object({ message: z.string(), success: z.boolean().default(false) }),
+//       "Unauthorized"
+//     ),
+//   },
+// });
 export type GetAllRoute = typeof getAll;
 export type CreateRoute = typeof create;
 export type GetOne = typeof getOne;
 export type PatchRoute = typeof patch;
 export type PublishRoute = typeof publish;
 export type GetUsersResources = typeof getUsersResources;
-export type UpvoteRoute = typeof upvote;
+// export type UpvoteRoute = typeof upvote;
