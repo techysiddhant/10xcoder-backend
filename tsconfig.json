@@ -17,6 +17,9 @@
     "outDir": "./dist",
     "paths": {
       "@/*": ["./src/*"]
+    }, 
+    "baseUrl": "./"
+  },"tsc-alias": {
+    "resolveFullPaths": true
     }
-  }
 }
