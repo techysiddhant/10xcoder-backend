@@ -286,7 +286,7 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
   const [existing] = await db
     .select()
     .from(resources)
-    .where(and(eq(resources.id, id), eq(resources.userId, user.id)));
+    .where(and(eq(resources.id, id), eq(resources.userId, userLogged.id)));
 
   if (!existing) {
     return c.json(
