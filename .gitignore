@@ -10,7 +10,7 @@ dist/
 .idea/workspace.xml
 .idea/usage.statistics.xml
 .idea/shelf
-
+.env.test
 # deps
 node_modules/
 .wrangler
