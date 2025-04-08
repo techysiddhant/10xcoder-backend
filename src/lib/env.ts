@@ -30,7 +30,6 @@ const EnvSchema = z
     BETTER_AUTH_SECRET: z.string().min(1),
     BETTER_AUTH_URL: z.string().url(),
     ORIGIN_URL: z.string().url(),
-    CLOUDFLARE_ACCOUNT_ID: z.string().min(1),
     EMAIL_VERIFICATION_CALLBACK_URL: z.string().min(1),
     RESEND_API_KEY: z.string().min(1),
     RESEND_EMAIL: z.string().email(),
