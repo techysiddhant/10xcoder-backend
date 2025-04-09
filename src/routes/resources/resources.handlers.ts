@@ -1,5 +1,4 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { nanoid } from "nanoid";
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import {
   categories,
@@ -115,7 +114,8 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
     image,
     resourceType,
     categoryId,
-  } = c.req.valid("form");
+    language,
+  } = c.req.valid("json");
 
   const tagNames = tagsArray
     .split(",")
@@ -143,9 +143,10 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       title,
       description,
       url,
-      image: String(image),
+      image,
       resourceType,
       categoryId,
+      language,
       upvoteCount: 0,
       userId: user.id,
     })
@@ -262,7 +263,6 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
 
 export const patch: AppRouteHandler<PatchRoute> = async (c) => {
   const { id } = c.req.param();
-  // const resource = c.req.valid("form");
   const userLogged = c.get("user");
   if (!userLogged?.id) {
     return c.json(
@@ -277,8 +277,9 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
     image,
     resourceType,
     categoryId,
+    language,
     tags: tagsString,
-  } = c.req.valid("form");
+  } = c.req.valid("json");
   const tagNames = (tagsString ?? "")
     .split(",")
     .map((tag: string) => tag.trim().toLowerCase())
@@ -294,55 +295,19 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
       HttpStatusCodes.NOT_FOUND
     );
   }
-  // if (resource.image && isValidImageType(resource.image)) {
-  //   return c.json(
-  //     { message: "Invalid image type", success: false },
-  //     HttpStatusCodes.BAD_REQUEST
-  //   );
-  // }
-  // let newImageKey = existingResource.image;
-
-  // if (resource.image) {
-  //   newImageKey = resource.image.name + nanoid(5);
-  //   if (existingResource.image) {
-  //     await c.env.MY_BUCKET.delete(existingResource.image);
-  //   }
-  //   const imageR2 = await c.env.MY_BUCKET.put(newImageKey, resource.image!);
-  //   if (!imageR2) {
-  //     return c.json(
-  //       { message: "Failed to upload image", success: false },
-  //       HttpStatusCodes.INTERNAL_SERVER_ERROR
-  //     );
-  //   }
-  // }
   await db
     .update(resources)
     .set({
       title,
       description,
       url,
-      image: String(image),
+      image,
       resourceType,
       categoryId,
+      language,
       updatedAt: new Date(),
     })
     .where(eq(resources.id, id));
-  // await db
-  //   .insert(categories)
-  //   .values({ name: resource.categoryName! })
-  //   .onConflictDoNothing();
-  // const [updatedResource] = await db
-  //   .update(resources)
-  //   .set({
-  //     title: resource.title,
-  //     description: resource.description,
-  //     url: resource.url,
-  //     image: newImageKey,
-  //     resourceType: resource.resourceType,
-  //     categoryName: resource.categoryName,
-  //   })
-  //   .where(eq(resources.id, params.id))
-  //   .returning();
   const existingTags = await db
     .select()
     .from(resourceTags)
@@ -357,7 +322,6 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
   if (newTagsToCreate.length > 0) {
     await db.insert(resourceTags).values(
       newTagsToCreate.map((name) => ({
-        id: nanoid(),
         name,
       }))
     );
@@ -376,7 +340,6 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
   if (finalTags.length > 0) {
     await db.insert(resourceToTag).values(
       finalTags.map((tag) => ({
-        id: nanoid(),
         resourceId: id,
         tagId: tag.id,
       }))
@@ -505,7 +468,6 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
 
   return c.json(result, HttpStatusCodes.OK); // ✅ Final return
 };
-
 // export const upvote: AppRouteHandler<UpvoteRoute> = async (c) => {
 //   const resourceId = c.req.param("id");
 //   const user = c.get("user");
