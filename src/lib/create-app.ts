@@ -8,23 +8,13 @@ import { auth } from "./auth";
 import { rateLimiter } from "hono-rate-limiter";
 import { RedisStore } from "@hono-rate-limiter/redis";
 import { redis } from "./redis";
+import env from "./env";
 export function createRouter() {
   return new OpenAPIHono<AppBindings>({ strict: false, defaultHook });
 }
 
 export default function createApp() {
   const app = createRouter();
-  app.use(
-    "*",
-    cors({
-      origin: "http://localhost:3000",
-      allowHeaders: ["Content-Type", "Authorization"],
-      allowMethods: ["POST", "GET", "OPTIONS", "PUT", "PATCH"],
-      exposeHeaders: ["Content-Length"],
-      maxAge: 600,
-      credentials: true,
-    })
-  );
 
   app.use("*", (c, next) => {
     rateLimiter({
@@ -36,6 +26,26 @@ export default function createApp() {
     });
     return next();
   });
+
+  app.notFound(notFound);
+  app.onError(onError);
+  app.use(pinoLogger());
+  app.use(
+    "*",
+    cors({
+      origin: env.ORIGIN_URL,
+      allowHeaders: [
+        "Content-Type",
+        "Authorization",
+        "x-uploadthing-version",
+        "x-uploadthing-package", // 👈 add this
+      ],
+      allowMethods: ["POST", "GET", "OPTIONS", "PUT", "PATCH"],
+      exposeHeaders: ["Content-Length"],
+      maxAge: 600,
+      credentials: true,
+    })
+  );
   app.use("*", async (c, next) => {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     if (!session) {
@@ -48,9 +58,5 @@ export default function createApp() {
     c.set("session", session.session);
     return next();
   });
-
-  app.notFound(notFound);
-  app.onError(onError);
-  app.use(pinoLogger());
   return app;
 }

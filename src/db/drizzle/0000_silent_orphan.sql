@@ -50,6 +50,7 @@ CREATE TABLE "resources" (
 	"url" text NOT NULL,
 	"image" text,
 	"resource_type" text NOT NULL,
+	"language" text DEFAULT 'english',
 	"category_id" uuid NOT NULL,
 	"upvote_count" integer DEFAULT 0 NOT NULL,
 	"is_published" boolean DEFAULT false NOT NULL,

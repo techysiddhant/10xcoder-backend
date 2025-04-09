@@ -1,6 +1,6 @@
 {
-  "id": "d1f88445-bcfe-41da-8f3b-0ec885be06a2",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "88d292cf-6644-4cd7-b326-19468eed95c3",
+  "prevId": "d1f88445-bcfe-41da-8f3b-0ec885be06a2",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -424,8 +424,7 @@
           "name": "language",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
-          "default": "'english'"
+          "notNull": true
         },
         "category_id": {
           "name": "category_id",

@@ -158,7 +158,7 @@ import {
   primaryKey,
   index,
 } from "drizzle-orm/pg-core";
-import { is } from "drizzle-orm";
+import { is, not } from "drizzle-orm";
 
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
@@ -225,6 +225,7 @@ export const resources = pgTable(
     url: text("url").notNull(),
     image: text("image"),
     resourceType: text("resource_type").notNull().$type<"video" | "article">(),
+    language: text("language").notNull().$type<"hindi" | "english">(),
     categoryId: uuid("category_id")
       .notNull()
       .references(() => categories.id, { onDelete: "cascade" }),
@@ -309,25 +310,10 @@ export const selectResourceSchema = createSelectSchema(resources)
 export const insertResourceSchema = createInsertSchema(resources, {
   title: z.string().min(1),
   resourceType: z.enum(["video", "article"]),
+  language: z.enum(["hindi", "english"]),
   categoryId: z.string().min(1),
   url: z.string().url(),
-  image: z
-    .custom<File | undefined>((file) => {
-      if (!file) return true; // Allow no image (optional)
-
-      if (!(file instanceof File)) return false;
-
-      if (!isValidImageType(file)) {
-        return false; // Invalid file type
-      }
-
-      if (file.size > 2 * 1024 * 1024) {
-        return false; // File too large (2MB max)
-      }
-
-      return true;
-    }, "Invalid image file (must be JPEG/PNG, max 2MB)")
-    .optional(),
+  image: z.string().url().optional(),
 })
   .omit({
     createdAt: true,

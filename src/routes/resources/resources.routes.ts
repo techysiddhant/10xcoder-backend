@@ -28,14 +28,7 @@ export const create = createRoute({
   method: "post",
   tags,
   request: {
-    body: {
-      content: {
-        "multipart/form-data": {
-          schema: insertResourceSchema,
-        },
-      },
-      description: "The Resource to create",
-    },
+    body: jsonContent(insertResourceSchema, "The Resource to create"),
   },
   responses: {
     [HttpStatusCodes.CREATED]: jsonContent(
@@ -95,14 +88,7 @@ export const patch = createRoute({
   tags,
   request: {
     params: ResourceParamsSchema,
-    body: {
-      content: {
-        "multipart/form-data": {
-          schema: patchResourceSchema,
-        },
-      },
-      description: "The Resource to update",
-    },
+    body: jsonContent(patchResourceSchema, "The Resource to update"),
   },
   responses: {
     [HttpStatusCodes.OK]: jsonContent(

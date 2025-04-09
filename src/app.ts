@@ -39,6 +39,7 @@ app.on(["POST"], "/resources", isAuth);
 app.on(["PATCH"], "/resource/:id", isAuth);
 app.on(["GET"], "/user/resources", isAuth);
 app.on(["PATCH"], "/resource/upvote/:id", isAuth);
+app.on(["GET", "POST"], "/api/uploadthing", isAuth);
 routes.forEach((route) => {
   app.route("/", route);
 });
