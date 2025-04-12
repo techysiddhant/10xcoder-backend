@@ -2,15 +2,15 @@ import { AppRouteHandler } from "@/lib/types";
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import { GetAllRoute } from "./tags.routes";
 import db from "@/db";
+import { redis } from "@/lib/redis";
 
 export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
-  // const cachedTags = await c.env.MY_KV.get("tags");
-  // if (cachedTags) {
-  //   return c.json(JSON.parse(cachedTags), HttpStatusCodes.OK);
-  // }
+  const cached = await redis.get("tags");
+  if (cached) {
+    const data = typeof cached === "string" ? JSON.parse(cached) : null;
+    return c.json(data, HttpStatusCodes.OK);
+  }
   const tags = await db.query.resourceTags.findMany();
-  // await c.env.MY_KV.put("tags", JSON.stringify(tags), {
-  //   expirationTtl: 60 * 10,
-  // });
+  await redis.set("tags", JSON.stringify(tags), { ex: 600 });
   return c.json(tags, HttpStatusCodes.OK);
 };

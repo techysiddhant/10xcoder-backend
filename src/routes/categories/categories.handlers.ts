@@ -2,15 +2,15 @@ import { AppRouteHandler } from "@/lib/types";
 import { GetAllRoute } from "./categories.routes";
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import db from "@/db";
+import { redis } from "@/lib/redis";
 
 export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
-  // const cachedCategories = await c.env.MY_KV.get("categories");
-  // if (cachedCategories) {
-  //   return c.json(JSON.parse(cachedCategories), HttpStatusCodes.OK);
-  // }
+  const cachedData = await redis.get("categories");
+  if (cachedData) {
+    const data = typeof cachedData === "string" ? JSON.parse(cachedData) : null;
+    return c.json(data, HttpStatusCodes.OK);
+  }
   const categories = await db.query.categories.findMany();
-  // await c.env.MY_KV.put("categories", JSON.stringify(categories), {
-  //   expirationTtl: 60 * 10,
-  // });
+  await redis.set("categories", JSON.stringify(categories), { ex: 600 });
   return c.json(categories, HttpStatusCodes.OK);
 };
