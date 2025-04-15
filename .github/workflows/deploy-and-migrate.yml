@@ -12,15 +12,25 @@ jobs:
 
     steps:
       - name: Wait for Vercel deploy to succeed
-        uses: patrickedqvist/wait-for-vercel-preview@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          team-id: ${{ secrets.VERCEL_TEAM_ID }} # optional if you're in a team
-          check-interval: 10
-          max-wait: 300
-          environment: Production
+        run: |
+          for i in {1..30}; do
+            result=$(curl -s -H "Authorization: Bearer $VERCEL_TOKEN" \
+              "https://api.vercel.com/v13/deployments?projectId=$VERCEL_PROJECT_ID" \
+              | jq '.deployments[] | select(.state == "READY")')
+            if [ -n "$result" ]; then
+              echo "Deployment is READY."
+              break
+            fi
+            echo "Waiting for deployment to be READY..."
+            sleep 10
+          done
+          if [ -z "$result" ]; then
+            echo "Timed out waiting for deployment to be READY."
+            exit 1
+          fi
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
   migrate:
     name: Push Drizzle Schema to DB
