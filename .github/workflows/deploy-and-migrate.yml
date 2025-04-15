@@ -1,40 +1,15 @@
-name: Deploy & Migrate to Production
+name: Run Drizzle Migrations After Vercel Deploy
 
 on:
-  push:
-    branches:
-      - main
+  deployment_status:
 
 jobs:
-  wait-for-vercel-deploy:
-    name: Wait for Vercel Deployment
-    runs-on: ubuntu-latest
+  drizzle-migrate:
+    if: >
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment.environment == 'Production' &&
+      startsWith(github.event.deployment.ref, 'refs/heads/main')
 
-    steps:
-      - name: Wait for Vercel deploy to succeed
-        run: |
-          for i in {1..30}; do
-            result=$(curl -s -H "Authorization: Bearer $VERCEL_TOKEN" \
-              "https://api.vercel.com/v13/deployments?projectId=$VERCEL_PROJECT_ID" \
-              | jq '.deployments[] | select(.state == "READY")')
-            if [ -n "$result" ]; then
-              echo "Deployment is READY."
-              break
-            fi
-            echo "Waiting for deployment to be READY..."
-            sleep 10
-          done
-          if [ -z "$result" ]; then
-            echo "Timed out waiting for deployment to be READY."
-            exit 1
-          fi
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-
-  migrate:
-    name: Push Drizzle Schema to DB
-    needs: wait-for-vercel-deploy
     runs-on: ubuntu-latest
 
     steps:
@@ -52,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Run Drizzle push
+      - name: Run Drizzle Push
         run: pnpm drizzle-kit push
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
