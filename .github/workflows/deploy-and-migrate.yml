@@ -1,0 +1,48 @@
+name: Deploy & Migrate to Production
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  wait-for-vercel-deploy:
+    name: Wait for Vercel Deployment
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Wait for Vercel deploy to succeed
+        uses: patrickedqvist/wait-for-vercel-preview@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          team-id: ${{ secrets.VERCEL_TEAM_ID }} # optional if you're in a team
+          check-interval: 10
+          max-wait: 300
+          environment: Production
+
+  migrate:
+    name: Push Drizzle Schema to DB
+    needs: wait-for-vercel-deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Run Drizzle push
+        run: pnpm drizzle-kit push
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
