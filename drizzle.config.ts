@@ -78,7 +78,7 @@
 //       },
 //     });
 
-import env from "@/lib/env";
+// import env from "@/lib/env";
 import "dotenv/config";
 import { defineConfig } from "drizzle-kit";
 
@@ -87,6 +87,6 @@ export default defineConfig({
   schema: "./src/db/schema.ts",
   dialect: "postgresql",
   dbCredentials: {
-    url: env.DATABASE_URL,
+    url: process.env.DATABASE_URL!,
   },
 });
