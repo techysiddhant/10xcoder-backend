@@ -1,4 +1,4 @@
-name: Migrate After Vercel Deploy
+name: Push Drizzle Migrations
 
 on:
   repository_dispatch:
@@ -17,17 +17,6 @@ jobs:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
     steps:
-      # - name: Debug Environment Variables
-      #   run: |
-      #     echo "DATABASE_URL=${{ secrets.DATABASE_URL }}"
-      #     if [ -z "${{ secrets.DATABASE_URL }}" ]; then
-      #       echo "DATABASE_URL is not set. Ensure it's configured in the repository secrets."
-      #       exit 1
-      #     fi
-      # - name: Debug Vercel Payload
-      #   run: |
-      #     echo "Payload from Vercel:"
-      #     cat $GITHUB_EVENT_PATH
 
       - name: Check Deployment Branch
         run: |
