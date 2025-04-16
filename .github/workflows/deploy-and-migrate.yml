@@ -44,5 +44,5 @@ jobs:
           NODE_ENV: ci
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - name: Run Drizzle Push
-        run: pnpm drizzle-kit push
+        run: npx drizzle-kit migrate
         
