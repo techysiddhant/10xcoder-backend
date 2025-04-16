@@ -43,6 +43,6 @@ jobs:
         env:
           NODE_ENV: ci
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      - name: Run Drizzle Push
+      - name: Run Drizzle Migrate
         run: npx drizzle-kit migrate
         
