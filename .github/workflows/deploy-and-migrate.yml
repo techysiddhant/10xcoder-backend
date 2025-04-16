@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NODE_ENV: ci
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - name: Debug Vercel Payload
         run: |
@@ -46,5 +47,4 @@ jobs:
 
       - name: Run Drizzle Push
         run: pnpm drizzle-kit push
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        
