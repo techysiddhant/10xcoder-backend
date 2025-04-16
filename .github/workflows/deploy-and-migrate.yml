@@ -21,7 +21,7 @@ jobs:
 
       - name: Check Deployment Branch
         run: |
-          BRANCH=$(jq -r '.client_payload.meta.githubCommitRef' $GITHUB_EVENT_PATH)
+          BRANCH=$(jq -r '.client_payload.git.ref' "$GITHUB_EVENT_PATH")
           echo "Deployment triggered from branch: $BRANCH"
           if [[ "$BRANCH" != "${EXPECTED_BRANCH}" ]]; then
             echo "Not a deployment from '${EXPECTED_BRANCH}' branch. Skipping migration."
