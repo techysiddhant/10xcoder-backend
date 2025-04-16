@@ -28,7 +28,6 @@ jobs:
       #   run: |
       #     echo "Payload from Vercel:"
       #     cat $GITHUB_EVENT_PATH
-
       - name: Check Deployment Branch
         run: |
           BRANCH=$(jq -r '.client_payload.git.ref' "$GITHUB_EVENT_PATH")
