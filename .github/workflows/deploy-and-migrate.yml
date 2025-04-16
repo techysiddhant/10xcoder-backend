@@ -1,19 +1,35 @@
-name: Run Drizzle Migrations After Vercel Deploy
+name: Migrate After Vercel Deploy
 
 on:
-  deployment_status:
+  repository_dispatch:
+    types: [vercel.deployment.success]
+
+env:
+  VERCEL_PROJECT_NAME: no-name-backend  # e.g., 'no-name'
+  EXPECTED_BRANCH: main
 
 jobs:
-  drizzle-migrate:
-    if: >
-      github.event.deployment_status.state == 'success' &&
-      github.event.deployment.environment == 'Production' &&
-      startsWith(github.event.deployment.ref, 'refs/heads/main')
-
+  migrate:
+    name: Run Drizzle Migrations After Successful Deploy
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Debug Vercel Payload
+        run: |
+          echo "Payload from Vercel:"
+          cat $GITHUB_EVENT_PATH
+
+      - name: Check Deployment Branch
+        run: |
+          BRANCH=$(jq -r '.client_payload.meta.githubCommitRef' $GITHUB_EVENT_PATH)
+          echo "Deployment triggered from branch: $BRANCH"
+          if [[ "$BRANCH" != "${EXPECTED_BRANCH}" ]]; then
+            echo "Not a deployment from '${EXPECTED_BRANCH}' branch. Skipping migration."
+            exit 1
+          fi
+        shell: bash
+
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Setup Node.js
