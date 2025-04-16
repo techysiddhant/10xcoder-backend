@@ -12,7 +12,8 @@ jobs:
   migrate:
     name: Run Drizzle Migrations After Successful Deploy
     runs-on: ubuntu-latest
-
+    env:
+      NODE_ENV: ci
     steps:
       - name: Debug Vercel Payload
         run: |
