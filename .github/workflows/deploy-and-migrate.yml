@@ -15,7 +15,15 @@ jobs:
     env:
       NODE_ENV: ci
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
     steps:
+      - name: Debug Environment Variables
+        run: |
+          echo "DATABASE_URL=${{ secrets.DATABASE_URL }}"
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL is not set. Ensure it's configured in the repository secrets."
+            exit 1
+          fi
       - name: Debug Vercel Payload
         run: |
           echo "Payload from Vercel:"
