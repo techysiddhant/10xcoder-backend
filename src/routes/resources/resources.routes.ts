@@ -20,6 +20,10 @@ export const getAll = createRoute({
       z.array(selectResourceSchema),
       "The List of Resources"
     ),
+    [HttpStatusCodes.BAD_REQUEST]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Resources not found"
+    ),
   },
 });
 

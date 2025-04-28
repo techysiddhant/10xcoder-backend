@@ -53,6 +53,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const tagsParam = c.req.query("tags") ?? "";
 
   const cursor = c.req.query("cursor") ?? undefined;
+  let cursorDate: Date | undefined;
   const rawLimit = c.req.query("limit") ?? "10";
   const limit = Number.parseInt(rawLimit, 10);
   if (Number.isNaN(limit) || limit < 10 || limit > 50) {
@@ -60,6 +61,17 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
       { message: "Invalid limit", success: false },
       HttpStatusCodes.BAD_REQUEST
     );
+  }
+  if (cursor != null) {
+    const timestamp = Date.parse(cursor);
+    if (Number.isNaN(timestamp)) {
+      // return a 400 Bad Request or throw a BadRequestError
+      return c.json(
+        { message: "Invalid cursor ", success: false },
+        HttpStatusCodes.BAD_REQUEST
+      );
+    }
+    cursorDate = new Date(timestamp);
   }
 
   const tags = tagsParam
