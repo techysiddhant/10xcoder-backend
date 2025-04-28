@@ -53,8 +53,14 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const tagsParam = c.req.query("tags") ?? "";
 
   const cursor = c.req.query("cursor") ?? undefined;
-  const limitParam = c.req.query("limit") ?? "10";
-  const limit = parseInt(limitParam, 10);
+  const rawLimit = c.req.query("limit") ?? "10";
+  const limit = Number.parseInt(rawLimit, 10);
+  if (Number.isNaN(limit) || limit < 10 || limit > 50) {
+    return c.json(
+      { message: "Invalid limit", success: false },
+      HttpStatusCodes.BAD_REQUEST
+    );
+  }
 
   const tags = tagsParam
     .split(",")
@@ -85,7 +91,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
       : []),
     ...(categoryName ? [eq(categories.name, categoryName)] : []),
     ...(tags.length > 0 ? [inArray(resourceTags.name, tags)] : []),
-    ...(cursor ? [lt(resources.id, cursor)] : [])
+    ...(cursor ? [lt(resources.createdAt, new Date(cursor))] : [])
   );
 
   const filteredResources = await db
@@ -113,7 +119,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
         ? sql`COUNT(DISTINCT ${resourceTags.name}) = ${tags.length}`
         : undefined
     )
-    .orderBy(desc(resources.createdAt))
+    .orderBy(desc(resources.createdAt), desc(resources.id))
     .limit(limit + 1); // limit + 1 for nextCursor
 
   const resourceIds = filteredResources.map((r) => r.id);
@@ -144,7 +150,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   let nextCursor: string | null = null;
   if (finalData.length > limit) {
     const nextItem = finalData.pop(); // remove extra
-    nextCursor = nextItem?.id ?? null;
+    nextCursor = nextItem?.createdAt.toISOString() ?? null;
   }
 
   const response = {
