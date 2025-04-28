@@ -159,6 +159,12 @@ export const getUsersResources = createRoute({
   path: "/user/resources",
   method: "get",
   tags,
+  request: {
+    query: z.object({
+      page: z.coerce.number().default(1),
+      limit: z.coerce.number().default(10),
+    }),
+  },
   responses: {
     [HttpStatusCodes.OK]: jsonContent(
       z.object({

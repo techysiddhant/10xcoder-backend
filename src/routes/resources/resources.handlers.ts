@@ -144,10 +144,18 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
     language,
   } = c.req.valid("json");
 
-  const tagNames = (tagsArray ?? "")
-    .split(",")
-    .map((tag: string) => tag.trim().toLowerCase())
-    .filter((tag: string) => tag.length > 0);
+  // const tagNames = (tagsArray ?? "")
+  //   .split(",")
+  //   .map((tag: string) => tag.trim().toLowerCase())
+  //   .filter((tag: string) => tag.length > 0);
+  const tagNames = Array.from(
+    new Set(
+      (tagsArray ?? "")
+        .split(",")
+        .map((tag) => tag.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
 
   const userLoggedIn = c.get("user");
 
@@ -175,7 +183,7 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       language,
       upvoteCount: 0,
       userId: userLoggedIn.id,
-      isPublished: userLoggedIn.role === "admin" ? true : false,
+      isPublished: userLoggedIn.role === "admin",
     })
     .returning();
   const existingTags = await db
@@ -206,7 +214,7 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       }))
     );
   }
-  redis.del("user-resources:" + userLoggedIn.id);
+  await deleteResourceKeys(`user-resources:${userLoggedIn.id}:*`);
   if (userLoggedIn.role === "admin") {
     await deleteResourceKeys("resources:*");
     await deleteResourceKeys(`user-resources:${userLoggedIn.id}:*`);
@@ -343,7 +351,7 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
       categoryId,
       language,
       updatedAt: new Date(),
-      isPublished: userLogged.role === "admin" ? true : false,
+      isPublished: userLogged.role === "admin",
     })
     .where(eq(resources.id, id));
   const existingTags = await db
@@ -387,8 +395,9 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
   // 4. Invalidate Redis cache
   await redis.del(`resource:${id}`);
   await redis.del(`resource:${id}:user:${userLogged.id}`);
-  await redis.del(`user-resources:${userLogged.id}`);
+  await deleteResourceKeys(`user-resources:${userLogged.id}:*`);
   await deleteResourceKeys("resources:*");
+  await deleteResourceKeys(`resource:${id}:user:*`);
 
   return c.json(
     { success: true, message: "Resource updated successfully" },
@@ -420,7 +429,7 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
   await db
     .update(resources)
     .set({
-      isPublished: existing.isPublished ? false : true,
+      isPublished: status === "approved" ? true : false,
       status: status,
       updatedAt: new Date(),
     })
@@ -527,15 +536,15 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
     );
   }
 
-  const page = parseInt(c.req.query("page") || "1");
-  const limit = parseInt(c.req.query("limit") || "10");
+  const page = Number.parseInt(c.req.query("page") || "1", 10);
+  const limit = Number.parseInt(c.req.query("limit") || "10", 10);
   if (isNaN(page) || page < 1) {
     return c.json(
       { message: "Invalid page number", success: false },
       HttpStatusCodes.BAD_REQUEST
     );
   }
-  if (isNaN(limit) || limit < 10) {
+  if (Number.isNaN(limit) || limit < 10) {
     return c.json(
       { message: "Invalid limit number", success: false },
       HttpStatusCodes.BAD_REQUEST

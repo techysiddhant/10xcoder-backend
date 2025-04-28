@@ -159,6 +159,7 @@ export const selectTagSchema = createSelectSchema(resourceTags);
 export const selectResourceSchema = createSelectSchema(resources)
   .extend({
     tags: z.array(z.string()),
+    status: z.enum(["pending", "approved", "rejected"]),
   })
   .omit({
     userId: true,
