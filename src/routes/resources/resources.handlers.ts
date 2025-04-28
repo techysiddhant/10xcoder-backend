@@ -52,25 +52,62 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const categoryName = c.req.query("category") ?? "";
   const tagsParam = c.req.query("tags") ?? "";
 
+  const cursor = c.req.query("cursor") ?? undefined;
+  let cursorDate: Date | undefined;
+  const rawLimit = c.req.query("limit") ?? "10";
+  const limit = Number.parseInt(rawLimit, 10);
+  if (Number.isNaN(limit) || limit < 10 || limit > 50) {
+    return c.json(
+      { message: "Invalid limit", success: false },
+      HttpStatusCodes.BAD_REQUEST
+    );
+  }
+  if (cursor != null) {
+    const timestamp = Date.parse(cursor);
+    if (Number.isNaN(timestamp)) {
+      // return a 400 Bad Request or throw a BadRequestError
+      return c.json(
+        { message: "Invalid cursor ", success: false },
+        HttpStatusCodes.BAD_REQUEST
+      );
+    }
+    cursorDate = new Date(timestamp);
+  }
+
   const tags = tagsParam
     .split(",")
     .map((tag: string) => tag.trim())
     .filter(Boolean);
 
-  const cacheKey = `resources:${resourceType}:${categoryName}:${tags
-    .sort()
-    .join(",")}`;
+  // Generate a full cache key including cursor and limit
+  const cacheKey = [
+    "resources",
+    `type:${resourceType}`,
+    `category:${categoryName}`,
+    `tags:${tags.sort().join(",")}`,
+    `cursor:${cursor ?? "null"}`,
+    `limit:${limit}`,
+  ].join("|");
 
-  // Check Redis cache
+  // Try Redis Cache first
   const cached = await redis.get(cacheKey);
   if (cached) {
     const data = typeof cached === "string" ? cached : JSON.stringify(cached);
     return c.json(JSON.parse(data), HttpStatusCodes.OK);
   }
 
-  // Get filtered resources
+  // Build where clause
+  const baseWhere = and(
+    ...(resourceType && isResourceType(resourceType)
+      ? [eq(resources.resourceType, resourceType)]
+      : []),
+    ...(categoryName ? [eq(categories.name, categoryName)] : []),
+    ...(tags.length > 0 ? [inArray(resourceTags.name, tags)] : []),
+    ...(cursor ? [lt(resources.createdAt, new Date(cursor))] : [])
+  );
+
   const filteredResources = await db
-    .selectDistinctOn([resources.id], {
+    .selectDistinctOn([resources.createdAt], {
       id: resources.id,
       title: resources.title,
       description: resources.description,
@@ -87,25 +124,19 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
     .innerJoin(categories, eq(resources.categoryId, categories.id))
     .leftJoin(resourceToTag, eq(resourceToTag.resourceId, resources.id))
     .leftJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
-    .where(
-      and(
-        ...(resourceType && isResourceType(resourceType)
-          ? [eq(resources.resourceType, resourceType)]
-          : []),
-        ...(categoryName ? [eq(categories.name, categoryName)] : []),
-        ...(tags.length > 0 ? [inArray(resourceTags.name, tags)] : [])
-      )
-    )
+    .where(baseWhere)
     .groupBy(resources.id, categories.id)
     .having(
       tags.length > 0
         ? sql`COUNT(DISTINCT ${resourceTags.name}) = ${tags.length}`
         : undefined
-    );
+    )
+    .orderBy(desc(resources.createdAt), desc(resources.id))
+    .limit(limit + 1); // limit + 1 for nextCursor
 
   const resourceIds = filteredResources.map((r) => r.id);
 
-  // Fetch all tags for these resources in one go
+  // Fetch tags for resources
   const tagRows = await db
     .select({
       resourceId: resourceToTag.resourceId,
@@ -115,23 +146,36 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
     .innerJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
     .where(inArray(resourceToTag.resourceId, resourceIds));
 
-  // Group tags by resourceId
   const tagMap = new Map<string, string[]>();
   for (const { resourceId, tagName } of tagRows) {
     if (!tagMap.has(resourceId)) tagMap.set(resourceId, []);
     tagMap.get(resourceId)!.push(tagName);
   }
 
-  // Attach tags to each resource
-  const finalData = filteredResources.map((res) => ({
+  // Attach tags
+  let finalData = filteredResources.map((res) => ({
     ...res,
     tags: tagMap.get(res.id) ?? [],
   }));
 
-  // Cache for 10 min
-  await redis.set(cacheKey, JSON.stringify(finalData), { ex: 600 });
-  return c.json(finalData, HttpStatusCodes.OK);
+  // Handle nextCursor
+  let nextCursor: string | null = null;
+  if (finalData.length > limit) {
+    const nextItem = finalData.pop(); // remove extra
+    nextCursor = nextItem?.createdAt.toISOString() ?? null;
+  }
+
+  const response = {
+    resources: finalData,
+    nextCursor,
+  };
+
+  // Cache this page for 5 minutes
+  await redis.set(cacheKey, JSON.stringify(response), { ex: 300 });
+
+  return c.json(response, HttpStatusCodes.OK);
 };
+
 export const create: AppRouteHandler<CreateRoute> = async (c) => {
   const {
     tags: tagsArray,
@@ -447,83 +491,6 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
     }`,
   });
 };
-// export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
-//   c
-// ) => {
-//   const userLoggedIn = c.get("user");
-//   if (!userLoggedIn || !userLoggedIn.id) {
-//     return c.json(
-//       { message: "User not authenticated", success: false },
-//       HttpStatusCodes.UNAUTHORIZED
-//     );
-//   }
-
-//   const cacheKey = `user-resources:${userLoggedIn.id}`;
-
-//   // 1. Try Redis cache
-//   const cached = await redis.get(cacheKey);
-//   if (cached) {
-//     const data = typeof cached === "string" ? cached : JSON.stringify(cached);
-//     if (data) return c.json(JSON.parse(data), HttpStatusCodes.OK); // ✅ Only return the array
-//   }
-
-//   // 2. Fetch user's resources
-//   const userResources = await db
-//     .select({
-//       id: resources.id,
-//       title: resources.title,
-//       description: resources.description,
-//       url: resources.url,
-//       image: resources.image,
-//       resourceType: resources.resourceType,
-//       isPublished: resources.isPublished,
-//       createdAt: resources.createdAt,
-//       updatedAt: resources.updatedAt,
-//       categoryName: categories.name,
-//       upvoteCount: resources.upvoteCount,
-//       language: resources.language,
-//       status: resources.status,
-//     })
-//     .from(resources)
-//     .leftJoin(categories, eq(resources.categoryId, categories.id))
-//     .where(eq(resources.userId, userLoggedIn.id));
-
-//   if (userResources.length === 0) {
-//     await redis.set(cacheKey, JSON.stringify([]), { ex: 600 });
-//     return c.json([], HttpStatusCodes.OK); // ✅ Return empty array
-//   }
-
-//   // 3. Get tag mappings
-//   const resourceIds = userResources.map((r) => r.id);
-//   const tagMappings = await db
-//     .select({
-//       resourceId: resourceToTag.resourceId,
-//       tagName: resourceTags.name,
-//     })
-//     .from(resourceToTag)
-//     .leftJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
-//     .where(inArray(resourceToTag.resourceId, resourceIds));
-
-//   // 4. Group tags by resource
-//   const resourceTagMap: Record<string, string[]> = {};
-//   for (const { resourceId, tagName } of tagMappings) {
-//     if (!resourceTagMap[resourceId]) resourceTagMap[resourceId] = [];
-//     if (tagName !== null) {
-//       resourceTagMap[resourceId].push(tagName);
-//     }
-//   }
-
-//   // 5. Merge tags into resource objects
-//   const result = userResources.map((res) => ({
-//     ...res,
-//     tags: resourceTagMap[res.id] || [],
-//   }));
-
-//   // 6. Cache result
-//   await redis.set(cacheKey, JSON.stringify(result), { ex: 600 });
-
-//   return c.json(result, HttpStatusCodes.OK); // ✅ Final return
-// };
 export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
   c
 ) => {
