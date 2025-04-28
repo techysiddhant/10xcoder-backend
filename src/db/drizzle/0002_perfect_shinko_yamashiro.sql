@@ -1,0 +1,1 @@
+ALTER TABLE "resources" ADD COLUMN "status" text DEFAULT 'pending' NOT NULL;
