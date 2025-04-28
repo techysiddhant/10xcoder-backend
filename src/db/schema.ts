@@ -83,6 +83,10 @@ export const resources = pgTable(
       .references(() => categories.id, { onDelete: "cascade" }),
     upvoteCount: integer("upvote_count").notNull().default(0),
     isPublished: boolean("is_published").notNull().default(false),
+    status: text("status")
+      .notNull()
+      .$type<"pending" | "approved" | "rejected">()
+      .default("pending"),
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),

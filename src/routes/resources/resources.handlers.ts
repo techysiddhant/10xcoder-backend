@@ -1,4 +1,6 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, sql } from "drizzle-orm";
+import { count, SQL } from "drizzle-orm/sql";
+
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import {
   categories,
@@ -20,6 +22,30 @@ import type {
 } from "./resources.routes";
 import { redis } from "@/lib/redis";
 import db from "@/db";
+import { alias } from "drizzle-orm/pg-core";
+async function deleteResourceKeys(pattern: string) {
+  let cursor = 0;
+  const keysToDelete: string[] = [];
+
+  do {
+    const [nextCursor, keys] = await redis.scan(cursor, {
+      match: pattern,
+      count: 100,
+    });
+    cursor = Number(nextCursor);
+    keysToDelete.push(...keys);
+  } while (cursor !== 0);
+
+  // Delete in batches
+  const BATCH_SIZE = 10;
+  for (let i = 0; i < keysToDelete.length; i += BATCH_SIZE) {
+    const batch = keysToDelete.slice(i, i + BATCH_SIZE);
+    await redis.del(...batch);
+    console.log(`🗑️ Deleted batch:`, batch);
+  }
+
+  console.log(`✅ Deleted ${keysToDelete.length} keys`);
+}
 
 export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const resourceType = c.req.query("resourceType") ?? "";
@@ -38,8 +64,8 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   // Check Redis cache
   const cached = await redis.get(cacheKey);
   if (cached) {
-    const data = typeof cached === "string" ? JSON.parse(cached) : null;
-    return c.json(data, HttpStatusCodes.OK);
+    const data = typeof cached === "string" ? cached : JSON.stringify(cached);
+    return c.json(JSON.parse(data), HttpStatusCodes.OK);
   }
 
   // Get filtered resources
@@ -54,6 +80,8 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
       categoryId: resources.categoryId,
       createdAt: resources.createdAt,
       updatedAt: resources.updatedAt,
+      categoryName: categories.name,
+      language: resources.language,
     })
     .from(resources)
     .innerJoin(categories, eq(resources.categoryId, categories.id))
@@ -68,7 +96,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
         ...(tags.length > 0 ? [inArray(resourceTags.name, tags)] : [])
       )
     )
-    .groupBy(resources.id)
+    .groupBy(resources.id, categories.id)
     .having(
       tags.length > 0
         ? sql`COUNT(DISTINCT ${resourceTags.name}) = ${tags.length}`
@@ -102,7 +130,6 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
 
   // Cache for 10 min
   await redis.set(cacheKey, JSON.stringify(finalData), { ex: 600 });
-
   return c.json(finalData, HttpStatusCodes.OK);
 };
 export const create: AppRouteHandler<CreateRoute> = async (c) => {
@@ -117,20 +144,19 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
     language,
   } = c.req.valid("json");
 
-  const tagNames = tagsArray
+  const tagNames = (tagsArray ?? "")
     .split(",")
     .map((tag: string) => tag.trim().toLowerCase())
     .filter((tag: string) => tag.length > 0);
 
-  const user = c.get("user");
+  const userLoggedIn = c.get("user");
 
-  if (!user || !user.id) {
+  if (!userLoggedIn || !userLoggedIn.id) {
     return c.json(
       { message: "User not authenticated", success: false },
       HttpStatusCodes.UNAUTHORIZED
     );
   }
-
   if (!isResourceType(resourceType)) {
     return c.json(
       { message: "Invalid resource type", success: false },
@@ -148,7 +174,8 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       categoryId,
       language,
       upvoteCount: 0,
-      userId: user.id,
+      userId: userLoggedIn.id,
+      isPublished: userLoggedIn.role === "admin" ? true : false,
     })
     .returning();
   const existingTags = await db
@@ -179,7 +206,11 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       }))
     );
   }
-  redis.del("user-resources:" + user.id);
+  redis.del("user-resources:" + userLoggedIn.id);
+  if (userLoggedIn.role === "admin") {
+    await deleteResourceKeys("resources:*");
+    await deleteResourceKeys(`user-resources:${userLoggedIn.id}:*`);
+  }
   return c.json(
     { success: true, resourceId: createdResource.id },
     HttpStatusCodes.CREATED
@@ -192,9 +223,10 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
   const cacheKey = `resource:${id}:user:${userLogged?.id || "guest"}`;
   const cached = await redis.get(cacheKey);
   if (cached) {
-    const data = typeof cached === "string" ? JSON.parse(cached) : null;
-    return c.json(data, HttpStatusCodes.OK);
+    const data = typeof cached === "string" ? cached : JSON.stringify(cached);
+    return c.json(JSON.parse(data), HttpStatusCodes.OK);
   }
+  const creator = alias(user, "creator");
   const [resource] = await db
     .select({
       id: resources.id,
@@ -207,19 +239,24 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
       createdAt: resources.createdAt,
       updatedAt: resources.updatedAt,
       categoryName: categories.name,
+      language: resources.language,
+      categoryId: resources.categoryId,
       creator: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
+        name: creator.name,
+        username: creator.username,
       },
+      status: resources.status,
+      isPublished: resources.isPublished,
     })
     .from(resources)
     .innerJoin(categories, eq(resources.categoryId, categories.id))
-    .innerJoin(
-      user,
-      userLogged?.id ? eq(resources.userId, userLogged.id) : undefined
-    )
-    .where(and(eq(resources.id, id), eq(resources.isPublished, true)));
+    .innerJoin(creator, eq(resources.userId, creator.id))
+    .where(
+      and(
+        eq(resources.id, id),
+        userLogged?.id ? undefined : eq(resources.isPublished, true)
+      )
+    );
 
   if (!resource) {
     return c.json(
@@ -237,14 +274,14 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
 
   const tags = tagRows.map((row) => row.tagName);
   let isVoted = false;
-  if (user?.id) {
+  if (userLogged?.id) {
     const vote = await db
       .select({ id: resourceUpvotes.userId })
       .from(resourceUpvotes)
       .where(
         and(
           eq(resourceUpvotes.resourceId, id),
-          eq(resourceUpvotes.userId, user.id)
+          eq(resourceUpvotes.userId, userLogged.id)
         )
       )
       .limit(1);
@@ -306,6 +343,7 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
       categoryId,
       language,
       updatedAt: new Date(),
+      isPublished: userLogged.role === "admin" ? true : false,
     })
     .where(eq(resources.id, id));
   const existingTags = await db
@@ -348,7 +386,10 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
 
   // 4. Invalidate Redis cache
   await redis.del(`resource:${id}`);
-  await redis.del(`resource:${id}:user:${user.id}`);
+  await redis.del(`resource:${id}:user:${userLogged.id}`);
+  await redis.del(`user-resources:${userLogged.id}`);
+  await deleteResourceKeys("resources:*");
+
   return c.json(
     { success: true, message: "Resource updated successfully" },
     HttpStatusCodes.OK
@@ -357,8 +398,9 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
 
 export const publish: AppRouteHandler<PublishRoute> = async (c) => {
   const { id } = c.req.param();
-  const user = c.get("user");
-  if (!user || !user.id || user.role !== "admin") {
+  const { status } = c.req.valid("json");
+  const userLoggedIn = c.get("user");
+  if (!userLoggedIn || !userLoggedIn.id || userLoggedIn.role !== "admin") {
     return c.json(
       { message: "User not authenticated", success: false },
       HttpStatusCodes.UNAUTHORIZED
@@ -379,13 +421,16 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
     .update(resources)
     .set({
       isPublished: existing.isPublished ? false : true,
+      status: status,
       updatedAt: new Date(),
     })
     .where(eq(resources.id, id));
 
   // 4. Invalidate cache
   await redis.del(`resource:${id}`);
-
+  await deleteResourceKeys("resources:*");
+  await deleteResourceKeys(`user-resources:${userLoggedIn.id}:*`);
+  await redis.del(`resource:${id}:user:${userLoggedIn.id}`);
   return c.json({
     success: true,
     message: `Resource has been ${
@@ -393,28 +438,123 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
     }`,
   });
 };
+// export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
+//   c
+// ) => {
+//   const userLoggedIn = c.get("user");
+//   if (!userLoggedIn || !userLoggedIn.id) {
+//     return c.json(
+//       { message: "User not authenticated", success: false },
+//       HttpStatusCodes.UNAUTHORIZED
+//     );
+//   }
+
+//   const cacheKey = `user-resources:${userLoggedIn.id}`;
+
+//   // 1. Try Redis cache
+//   const cached = await redis.get(cacheKey);
+//   if (cached) {
+//     const data = typeof cached === "string" ? cached : JSON.stringify(cached);
+//     if (data) return c.json(JSON.parse(data), HttpStatusCodes.OK); // ✅ Only return the array
+//   }
+
+//   // 2. Fetch user's resources
+//   const userResources = await db
+//     .select({
+//       id: resources.id,
+//       title: resources.title,
+//       description: resources.description,
+//       url: resources.url,
+//       image: resources.image,
+//       resourceType: resources.resourceType,
+//       isPublished: resources.isPublished,
+//       createdAt: resources.createdAt,
+//       updatedAt: resources.updatedAt,
+//       categoryName: categories.name,
+//       upvoteCount: resources.upvoteCount,
+//       language: resources.language,
+//       status: resources.status,
+//     })
+//     .from(resources)
+//     .leftJoin(categories, eq(resources.categoryId, categories.id))
+//     .where(eq(resources.userId, userLoggedIn.id));
+
+//   if (userResources.length === 0) {
+//     await redis.set(cacheKey, JSON.stringify([]), { ex: 600 });
+//     return c.json([], HttpStatusCodes.OK); // ✅ Return empty array
+//   }
+
+//   // 3. Get tag mappings
+//   const resourceIds = userResources.map((r) => r.id);
+//   const tagMappings = await db
+//     .select({
+//       resourceId: resourceToTag.resourceId,
+//       tagName: resourceTags.name,
+//     })
+//     .from(resourceToTag)
+//     .leftJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
+//     .where(inArray(resourceToTag.resourceId, resourceIds));
+
+//   // 4. Group tags by resource
+//   const resourceTagMap: Record<string, string[]> = {};
+//   for (const { resourceId, tagName } of tagMappings) {
+//     if (!resourceTagMap[resourceId]) resourceTagMap[resourceId] = [];
+//     if (tagName !== null) {
+//       resourceTagMap[resourceId].push(tagName);
+//     }
+//   }
+
+//   // 5. Merge tags into resource objects
+//   const result = userResources.map((res) => ({
+//     ...res,
+//     tags: resourceTagMap[res.id] || [],
+//   }));
+
+//   // 6. Cache result
+//   await redis.set(cacheKey, JSON.stringify(result), { ex: 600 });
+
+//   return c.json(result, HttpStatusCodes.OK); // ✅ Final return
+// };
 export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
   c
 ) => {
-  const user = c.get("user");
-  if (!user || !user.id) {
+  const userLoggedIn = c.get("user");
+
+  if (!userLoggedIn?.id) {
     return c.json(
       { message: "User not authenticated", success: false },
       HttpStatusCodes.UNAUTHORIZED
     );
   }
 
-  const cacheKey = `user-resources:${user.id}`;
+  const page = parseInt(c.req.query("page") || "1");
+  const limit = parseInt(c.req.query("limit") || "10");
+  if (isNaN(page) || page < 1) {
+    return c.json(
+      { message: "Invalid page number", success: false },
+      HttpStatusCodes.BAD_REQUEST
+    );
+  }
+  if (isNaN(limit) || limit < 10) {
+    return c.json(
+      { message: "Invalid limit number", success: false },
+      HttpStatusCodes.BAD_REQUEST
+    );
+  }
+  const offset = (page - 1) * limit;
+
+  const cacheKey = `user-resources:${userLoggedIn.id}:${page}:${limit}`;
 
   // 1. Try Redis cache
   const cached = await redis.get(cacheKey);
   if (cached) {
-    const data = typeof cached === "string" ? JSON.parse(cached) : null;
-    if (data) return c.json(data, HttpStatusCodes.OK); // ✅ Only return the array
+    const data = typeof cached === "string" ? cached : JSON.stringify(cached);
+    if (data) return c.json(JSON.parse(data), HttpStatusCodes.OK);
   }
 
-  // 2. Fetch user's resources
-  const userResources = await db
+  const baseWhere = eq(resources.userId, userLoggedIn.id);
+
+  const rows = await db
     .select({
       id: resources.id,
       title: resources.title,
@@ -427,18 +567,24 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
       updatedAt: resources.updatedAt,
       categoryName: categories.name,
       upvoteCount: resources.upvoteCount,
+      language: resources.language,
+      status: resources.status,
+      categoryId: resources.categoryId,
     })
     .from(resources)
     .leftJoin(categories, eq(resources.categoryId, categories.id))
-    .where(eq(resources.userId, user.id));
+    .where(baseWhere)
+    .orderBy(desc(resources.createdAt))
+    .limit(limit)
+    .offset(offset);
 
-  if (userResources.length === 0) {
-    await redis.set(cacheKey, JSON.stringify([]), { ex: 600 });
-    return c.json([], HttpStatusCodes.OK); // ✅ Return empty array
-  }
+  const totalCountResult = await db
+    .select({ count: count() })
+    .from(resources)
+    .where(baseWhere);
+  const totalCount = totalCountResult[0]?.count || 0;
 
-  // 3. Get tag mappings
-  const resourceIds = userResources.map((r) => r.id);
+  const resourceIds = rows.map((r) => r.id);
   const tagMappings = await db
     .select({
       resourceId: resourceToTag.resourceId,
@@ -448,23 +594,42 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
     .leftJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
     .where(inArray(resourceToTag.resourceId, resourceIds));
 
-  // 4. Group tags by resource
-  const resourceTagMap: Record<string, string[]> = {};
+  const tagMap: Record<string, string[]> = {};
   for (const { resourceId, tagName } of tagMappings) {
-    if (!resourceTagMap[resourceId]) resourceTagMap[resourceId] = [];
-    if (tagName !== null) {
-      resourceTagMap[resourceId].push(tagName);
-    }
+    if (!tagMap[resourceId]) tagMap[resourceId] = [];
+    if (tagName !== null) tagMap[resourceId].push(tagName);
   }
 
-  // 5. Merge tags into resource objects
-  const result = userResources.map((res) => ({
+  const resourcesWithTags = rows.map((res) => ({
     ...res,
-    tags: resourceTagMap[res.id] || [],
+    tags: tagMap[res.id] || [],
   }));
 
-  // 6. Cache result
-  await redis.set(cacheKey, JSON.stringify(result), { ex: 600 });
+  const hasNextPage = offset + limit < totalCount;
+  const hasPrevPage = offset > 0;
 
-  return c.json(result, HttpStatusCodes.OK); // ✅ Final return
+  await redis.set(
+    cacheKey,
+    JSON.stringify({
+      resources: resourcesWithTags,
+      page,
+      limit,
+      totalCount,
+      hasNextPage,
+      hasPrevPage,
+    }),
+    { ex: 300 }
+  );
+
+  return c.json(
+    {
+      resources: resourcesWithTags,
+      page,
+      limit,
+      totalCount,
+      hasNextPage,
+      hasPrevPage,
+    },
+    HttpStatusCodes.OK
+  );
 };

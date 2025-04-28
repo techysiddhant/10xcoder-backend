@@ -7,8 +7,8 @@ import { redis } from "@/lib/redis";
 export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const cached = await redis.get("tags");
   if (cached) {
-    const data = typeof cached === "string" ? JSON.parse(cached) : null;
-    return c.json(data, HttpStatusCodes.OK);
+    const data = typeof cached === "string" ? cached : JSON.stringify(cached);
+    return c.json(JSON.parse(data), HttpStatusCodes.OK);
   }
   const tags = await db.query.resourceTags.findMany();
   await redis.set("tags", JSON.stringify(tags), { ex: 600 });

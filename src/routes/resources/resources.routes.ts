@@ -129,6 +129,12 @@ export const publish = createRoute({
   method: "patch",
   request: {
     params: ResourceParamsSchema,
+    body: jsonContent(
+      z.object({
+        status: z.enum(["pending", "approved", "rejected"]),
+      }),
+      "The Resource to update"
+    ),
   },
   tags,
   responses: {
@@ -155,12 +161,23 @@ export const getUsersResources = createRoute({
   tags,
   responses: {
     [HttpStatusCodes.OK]: jsonContent(
-      z.array(selectResourceSchema),
+      z.object({
+        resources: z.array(selectResourceSchema),
+        page: z.number(),
+        limit: z.number(),
+        totalCount: z.number(),
+        hasNextPage: z.boolean(),
+        hasPrevPage: z.boolean(),
+      }),
       "The List of Resources by the user"
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
       "Unauthorized"
+    ),
+    [HttpStatusCodes.BAD_REQUEST]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Bad Request"
     ),
   },
 });
