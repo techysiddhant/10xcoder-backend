@@ -5,7 +5,7 @@ on:
     types: [vercel.deployment.success]
 
 env:
-  VERCEL_PROJECT_NAME: no-name-backend  # e.g., 'no-name'
+  VERCEL_PROJECT_NAME: no-name-backend 
   EXPECTED_BRANCH: main
 
 jobs:
