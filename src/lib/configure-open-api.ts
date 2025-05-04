@@ -5,9 +5,9 @@ export default function configureOpenAPI(app: AppOpenAPI) {
   app.doc("/doc", {
     openapi: "3.0.0",
     info: {
-      title: "Hono",
+      title: "10xcoder.club",
       version: packageJson.version,
-      description: "Hono API",
+      description: "10xcoder.club API",
     },
   });
 

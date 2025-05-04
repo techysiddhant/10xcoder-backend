@@ -1,5 +1,5 @@
-import { and, asc, desc, eq, gt, inArray, lt, sql } from "drizzle-orm";
-import { count, SQL } from "drizzle-orm/sql";
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { count } from "drizzle-orm/sql";
 
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import {
@@ -19,10 +19,90 @@ import type {
   GetUsersResources,
   PatchRoute,
   PublishRoute,
+  UpvoteQueueRoute,
+  UpvoteRoute,
 } from "./resources.routes";
-import { redis } from "@/lib/redis";
+import { redis, redisIo } from "@/lib/redis";
 import db from "@/db";
 import { alias } from "drizzle-orm/pg-core";
+import { qstashClient, qstashReceiver } from "@/lib/qstash";
+import env from "@/lib/env";
+import type { PinoLogger } from "hono-pino";
+import { Context } from "hono";
+const GETALL_TTL = 60 * 2; // 2 minutes
+
+async function processBatch(
+  listKey: string,
+  batchSize: number,
+  logger: PinoLogger
+): Promise<{ processed: number; failed: number }> {
+  let processed = 0;
+  let failed = 0;
+
+  // Process operations in a loop, atomically popping one item at a time
+  for (let i = 0; i < batchSize; i++) {
+    // LPOP atomically removes and returns the first element of the list
+    const opStr = await redisIo.lpop(listKey);
+
+    // Exit the loop if the list is empty
+    if (!opStr) break;
+
+    try {
+      const op = JSON.parse(opStr);
+      const { userId, resourceId, action } = op;
+
+      if (action === "add") {
+        // Check if upvote already exists to prevent duplicates
+        const existing = await db
+          .select()
+          .from(resourceUpvotes)
+          .where(
+            and(
+              eq(resourceUpvotes.userId, userId),
+              eq(resourceUpvotes.resourceId, resourceId)
+            )
+          )
+          .limit(1);
+
+        if (existing.length === 0) {
+          await db.insert(resourceUpvotes).values({
+            userId,
+            resourceId,
+          });
+          logger.info(
+            `Added upvote for user ${userId} on resource ${resourceId}`
+          );
+        } else {
+          logger.info(
+            `Skipped duplicate add for user ${userId} on resource ${resourceId}`
+          );
+        }
+      } else if (action === "remove") {
+        await db
+          .delete(resourceUpvotes)
+          .where(
+            and(
+              eq(resourceUpvotes.userId, userId),
+              eq(resourceUpvotes.resourceId, resourceId)
+            )
+          );
+        logger.info(
+          `Removed upvote for user ${userId} on resource ${resourceId}`
+        );
+      }
+
+      processed++;
+    } catch (error) {
+      logger.error(`Failed to process operation: ${opStr}`, error);
+      failed++;
+
+      // Move failed operations to a dead letter queue
+      await redisIo.rpush(`${listKey}:failed`, opStr);
+    }
+  }
+
+  return { processed, failed };
+}
 async function deleteResourceKeys(pattern: string) {
   let cursor = 0;
   const keysToDelete: string[] = [];
@@ -46,14 +126,14 @@ async function deleteResourceKeys(pattern: string) {
 
   console.log(`✅ Deleted ${keysToDelete.length} keys`);
 }
+const getUpvoteCountKey = (resourceId: string) => `upvote:count:${resourceId}`;
 
 export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const resourceType = c.req.query("resourceType") ?? "";
   const categoryName = c.req.query("category") ?? "";
   const tagsParam = c.req.query("tags") ?? "";
-
+  const userLoggedIn = c.get("user");
   const cursor = c.req.query("cursor") ?? undefined;
-  let cursorDate: Date | undefined;
   const rawLimit = c.req.query("limit") ?? "10";
   const limit = Number.parseInt(rawLimit, 10);
   if (Number.isNaN(limit) || limit < 10 || limit > 50) {
@@ -71,7 +151,6 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
         HttpStatusCodes.BAD_REQUEST
       );
     }
-    cursorDate = new Date(timestamp);
   }
 
   const tags = tagsParam
@@ -81,7 +160,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
 
   // Generate a full cache key including cursor and limit
   const cacheKey = [
-    "resources",
+    "resources:",
     `type:${resourceType}`,
     `category:${categoryName}`,
     `tags:${tags.sort().join(",")}`,
@@ -98,6 +177,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
 
   // Build where clause
   const baseWhere = and(
+    eq(resources.isPublished, true), // ✅ Ensure only published resources are included
     ...(resourceType && isResourceType(resourceType)
       ? [eq(resources.resourceType, resourceType)]
       : []),
@@ -136,6 +216,82 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
 
   const resourceIds = filteredResources.map((r) => r.id);
 
+  // First try to get all upvote counts from Redis in a single batch operation
+  const countKeys = resourceIds.map(getUpvoteCountKey);
+  const redisCounts = await redis.mget(...countKeys);
+
+  // Build a map of resource ID to upvote count
+  const upvoteCounts = new Map();
+
+  // Process the results from Redis
+  for (let i = 0; i < resourceIds.length; i++) {
+    const resourceId = resourceIds[i];
+    const redisCount = redisCounts[i];
+
+    if (redisCount !== null) {
+      // Found in Redis
+      upvoteCounts.set(resourceId, Number(redisCount));
+    } else {
+      // Not found in Redis, will need to fetch from DB
+      upvoteCounts.set(resourceId, null);
+    }
+  }
+
+  // For any missing counts, query the database
+  const missingIds = resourceIds.filter((id) => upvoteCounts.get(id) === null);
+
+  if (missingIds.length > 0) {
+    const dbCounts = await db.execute(sql`
+      SELECT resource_id, COUNT(*) as count
+      FROM resource_upvotes
+      WHERE resource_id IN (${sql.join(
+        missingIds.map((id) => sql`${id}`),
+        sql`, `
+      )})
+      GROUP BY resource_id
+    `);
+    // Update the counts map and cache in Redis
+    const pipeline = redis.pipeline();
+    const UPVOTE_COUNT_TTL = 60 * 60 * 24 * 7;
+    console.log("DB Counts", dbCounts);
+    dbCounts.forEach((row) => {
+      const resourceId = row.resource_id;
+      const count = Number(row.count);
+      upvoteCounts.set(resourceId, count);
+      // Cache this count in Redis
+      pipeline.set(getUpvoteCountKey(String(resourceId)), count, {
+        ex: UPVOTE_COUNT_TTL,
+      }); // 7 days TTL
+    });
+    // Any IDs not found in DB have 0 upvotes
+    missingIds.forEach((id) => {
+      if (upvoteCounts.get(id) === null) {
+        upvoteCounts.set(id, 0);
+        pipeline.set(getUpvoteCountKey(id), 0, {
+          ex: UPVOTE_COUNT_TTL,
+        });
+      }
+    });
+    // Execute all Redis operations in one round-trip
+    await pipeline.exec();
+  }
+  // Check if user has upvoted each resource (if logged in)
+  let userUpvotes = new Map();
+  if (userLoggedIn?.id) {
+    // Batch check user upvotes from Redis
+    const upvoteKeys = resourceIds.map(
+      (id) => `upvote:user:${userLoggedIn.id}:resource:${id}`
+    );
+    const userUpvoteResults = await redis.mget(...upvoteKeys);
+
+    // Build a map of resource ID to upvoted status
+    for (let i = 0; i < resourceIds.length; i++) {
+      userUpvotes.set(resourceIds[i], Boolean(userUpvoteResults[i]));
+    }
+
+    // For any not found in Redis, we could query the database as well,
+    // but that's optional since the upvote endpoint will handle it
+  }
   // Fetch tags for resources
   const tagRows = await db
     .select({
@@ -144,7 +300,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
     })
     .from(resourceToTag)
     .innerJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
-    .where(inArray(resourceToTag.resourceId, resourceIds));
+    .where(inArray(resourceToTag.resourceId, [...resourceIds]));
 
   const tagMap = new Map<string, string[]>();
   for (const { resourceId, tagName } of tagRows) {
@@ -153,10 +309,22 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   }
 
   // Attach tags
-  let finalData = filteredResources.map((res) => ({
-    ...res,
-    tags: tagMap.get(res.id) ?? [],
-  }));
+  // let finalData = filteredResources.map((res) => ({
+  //   ...res,
+  //   tags: tagMap.get(res.id) ?? [],
+  // }));
+  let finalData = filteredResources.map((res) => {
+    const upvoteCount = upvoteCounts.get(res.id) || 0;
+    const hasUpvoted = userLoggedIn?.id
+      ? userUpvotes.get(res.id) || false
+      : false;
+    return {
+      ...res,
+      tags: tagMap.get(res.id) ?? [],
+      upvoteCount,
+      hasUpvoted,
+    };
+  });
 
   // Handle nextCursor
   let nextCursor: string | null = null;
@@ -171,7 +339,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   };
 
   // Cache this page for 5 minutes
-  await redis.set(cacheKey, JSON.stringify(response), { ex: 300 });
+  await redis.set(cacheKey, JSON.stringify(response), { ex: GETALL_TTL });
 
   return c.json(response, HttpStatusCodes.OK);
 };
@@ -188,10 +356,6 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
     language,
   } = c.req.valid("json");
 
-  // const tagNames = (tagsArray ?? "")
-  //   .split(",")
-  //   .map((tag: string) => tag.trim().toLowerCase())
-  //   .filter((tag: string) => tag.length > 0);
   const tagNames = Array.from(
     new Set(
       (tagsArray ?? "")
@@ -228,6 +392,7 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       upvoteCount: 0,
       userId: userLoggedIn.id,
       isPublished: userLoggedIn.role === "admin",
+      status: userLoggedIn.role === "admin" ? "approved" : "pending",
     })
     .returning();
   const existingTags = await db
@@ -273,11 +438,13 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
   const { id } = c.req.param(); // assumes /resource/:id
   const userLogged = c.get("user");
   const cacheKey = `resource:${id}:user:${userLogged?.id || "guest"}`;
+
   const cached = await redis.get(cacheKey);
   if (cached) {
     const data = typeof cached === "string" ? cached : JSON.stringify(cached);
     return c.json(JSON.parse(data), HttpStatusCodes.OK);
   }
+
   const creator = alias(user, "creator");
   const [resource] = await db
     .select({
@@ -287,7 +454,6 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
       url: resources.url,
       image: resources.image,
       resourceType: resources.resourceType,
-      upvoteCount: resources.upvoteCount,
       createdAt: resources.createdAt,
       updatedAt: resources.updatedAt,
       categoryName: categories.name,
@@ -316,6 +482,8 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
       HttpStatusCodes.NOT_FOUND
     );
   }
+
+  // Fetch tags for the resource
   const tagRows = await db
     .select({
       tagName: resourceTags.name,
@@ -325,31 +493,69 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
     .where(eq(resourceToTag.resourceId, id));
 
   const tags = tagRows.map((row) => row.tagName);
-  let isVoted = false;
-  if (userLogged?.id) {
-    const vote = await db
-      .select({ id: resourceUpvotes.userId })
-      .from(resourceUpvotes)
-      .where(
-        and(
-          eq(resourceUpvotes.resourceId, id),
-          eq(resourceUpvotes.userId, userLogged.id)
-        )
-      )
-      .limit(1);
-    isVoted = vote.length > 0;
+  // Cache this count in Redis with 7 days TTL (matching getAll handler)
+  const UPVOTE_COUNT_TTL = 60 * 60 * 24 * 7;
+  // Get upvote count from Redis first
+  const upvoteCountKey = getUpvoteCountKey(id);
+  let upvoteCount = await redis.get(upvoteCountKey);
+
+  // If not in Redis, get from DB and cache it
+  if (upvoteCount === null) {
+    const [dbCount] = await db.execute(sql`
+      SELECT COUNT(*) as count
+      FROM resource_upvotes
+      WHERE resource_id = ${id}
+    `);
+
+    upvoteCount = Number(dbCount?.count || 0);
+
+    await redis.set(upvoteCountKey, upvoteCount, { ex: UPVOTE_COUNT_TTL });
+  } else {
+    upvoteCount = Number(upvoteCount);
   }
+
+  // Check if user has upvoted this resource (if logged in)
+  let hasUpvoted = false;
+  if (userLogged?.id) {
+    // First check Redis for user upvote status
+    const userUpvoteKey = `upvote:user:${userLogged.id}:resource:${id}`;
+    const cachedUpvoteStatus = await redis.get(userUpvoteKey);
+
+    if (cachedUpvoteStatus !== null) {
+      hasUpvoted = Boolean(cachedUpvoteStatus);
+    } else {
+      // Fall back to database check
+      const vote = await db
+        .select({ id: resourceUpvotes.userId })
+        .from(resourceUpvotes)
+        .where(
+          and(
+            eq(resourceUpvotes.resourceId, id),
+            eq(resourceUpvotes.userId, userLogged.id)
+          )
+        )
+        .limit(1);
+
+      hasUpvoted = vote.length > 0;
+
+      // Cache the result (this is optional, but matches approach from getAll)
+      await redis.set(userUpvoteKey, hasUpvoted ? "1" : "", {
+        ex: UPVOTE_COUNT_TTL,
+      });
+    }
+  }
+
   const finalData = {
     ...resource,
     tags,
-    isVoted,
+    upvoteCount,
+    hasUpvoted,
   };
 
   await redis.set(cacheKey, JSON.stringify(finalData), { ex: 600 });
 
   return c.json(finalData, HttpStatusCodes.OK);
 };
-
 export const patch: AppRouteHandler<PatchRoute> = async (c) => {
   const { id } = c.req.param();
   const userLogged = c.get("user");
@@ -608,4 +814,266 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
     },
     HttpStatusCodes.OK
   );
+};
+
+export const upvote: AppRouteHandler<UpvoteRoute> = async (c) => {
+  const { id } = c.req.param();
+  const userLoggedIn = c.get("user");
+  if (!userLoggedIn?.id) {
+    return c.json(
+      { message: "User not authenticated", success: false },
+      HttpStatusCodes.UNAUTHORIZED
+    );
+  }
+
+  const upvoteKey = `upvote:user:${userLoggedIn.id}:resource:${id}`;
+  const countKey = `upvote:count:${id}`;
+  const resourceKey = `resource:${id}:exists`;
+  const resourceSingleKeyUser = `resource:${id}:user:${userLoggedIn.id}`;
+
+  try {
+    // Check if resource exists
+    let resourceExists = await redisIo.get(resourceKey);
+    if (resourceExists === null) {
+      const [existing] = await db
+        .select()
+        .from(resources)
+        .where(eq(resources.id, id));
+      if (!existing) {
+        return c.json(
+          { success: false, message: "Resource not found" },
+          HttpStatusCodes.NOT_FOUND
+        );
+      }
+
+      await redisIo.set(resourceKey, 1, "EX", 60 * 60 * 24 * 7); // 7d TTL
+      resourceExists = "1";
+    }
+
+    // Check if already upvoted
+    const alreadyUpvoted = await redisIo.get(upvoteKey);
+    let newCount: number;
+
+    if (alreadyUpvoted) {
+      // Remove upvote from Redis
+      await redisIo.del(upvoteKey);
+      newCount = await redisIo.decr(countKey);
+      if (newCount < 0) {
+        newCount = 0;
+        await redisIo.set(countKey, 0);
+      }
+
+      // Queue the removal operation
+      await qstashClient.publishJSON({
+        url: `${env.APP_URL}/resource/upvote/queue`,
+        body: {
+          userId: userLoggedIn.id,
+          resourceId: id,
+          action: "remove",
+          timestamp: Date.now(),
+        },
+      });
+    } else {
+      // Add upvote to Redis
+      await redisIo.set(upvoteKey, 1, "EX", 60 * 60 * 24 * 7); // 7d TTL
+
+      // Initialize or increment count
+      const currentCount = await redisIo.get(countKey);
+      if (currentCount === null) {
+        const count = await db
+          .select({ count: sql`count(*)` })
+          .from(resourceUpvotes)
+          .where(eq(resourceUpvotes.resourceId, id));
+        newCount = Number(count[0]?.count || 0) + 1;
+        await redisIo.set(countKey, newCount, "EX", 60 * 60 * 24 * 7); // 7d TTL
+      } else {
+        newCount = await redisIo.incr(countKey);
+      }
+
+      // Queue the add operation
+      await qstashClient.publishJSON({
+        url: `${env.APP_URL}/resource/upvote/queue`,
+        body: {
+          userId: userLoggedIn.id,
+          resourceId: id,
+          action: "add",
+          timestamp: Date.now(),
+        },
+      });
+    }
+
+    // Invalidate cache
+    await redisIo.del(resourceSingleKeyUser);
+    await deleteResourceKeys(`resources:*`);
+
+    // Publish real-time event
+    await redisIo.publish(
+      "upvote-events",
+      JSON.stringify({
+        resourceId: id,
+        count: newCount,
+        action: alreadyUpvoted ? "removed" : "added",
+        timestamp: Date.now(),
+      })
+    );
+
+    return c.json(
+      {
+        success: true,
+        resourceId: id,
+        count: newCount,
+        action: alreadyUpvoted ? "removed" : "added",
+      },
+      HttpStatusCodes.OK
+    );
+  } catch (error) {
+    console.error("Error in upvote handler:", error);
+    return c.json(
+      { success: false, message: "Internal server error" },
+      HttpStatusCodes.INTERNAL_SERVER_ERROR
+    );
+  }
+};
+export const upvoteQueue: AppRouteHandler<UpvoteQueueRoute> = async (c) => {
+  try {
+    const { userId, resourceId, action, timestamp } = c.req.valid("json");
+    const { logger } = c.var;
+
+    // Verify request signature from QStash
+    const signature = c.req.header("upstash-signature");
+    if (!signature) {
+      return c.json(
+        { success: false, message: "Invalid signature" },
+        HttpStatusCodes.UNAUTHORIZED
+      );
+    }
+
+    const body = await c.req.json();
+    const isValid = await qstashReceiver.verify({
+      signature,
+      body: JSON.stringify(body),
+      url: `${env.APP_URL}/resource/upvote/queue`,
+    });
+
+    if (!isValid) {
+      return c.json(
+        { success: false, message: "Invalid signature" },
+        HttpStatusCodes.UNAUTHORIZED
+      );
+    }
+
+    if (!userId || !resourceId || !action) {
+      return c.json(
+        { success: false, message: "Invalid request" },
+        HttpStatusCodes.BAD_REQUEST
+      );
+    }
+
+    // Add operation to Redis list for batch processing
+    const operation = JSON.stringify({
+      userId,
+      resourceId,
+      action,
+      timestamp,
+    });
+
+    // Use different lists for adds and removes to allow prioritization if needed
+    const listKey =
+      action === "add" ? "upvote:batch:add" : "upvote:batch:remove";
+    await redisIo.rpush(listKey, operation);
+
+    logger.info(
+      `Queued ${action} operation for user ${userId} on resource ${resourceId}`
+    );
+
+    // Check if we need to schedule a batch job
+    // We'll schedule a job if one isn't already scheduled (using a sentinel key)
+    const batchJobScheduled = await redisIo.get("upvote:batch:scheduled");
+    if (!batchJobScheduled) {
+      // Schedule a batch job to run in 1 minute
+      await qstashClient.publishJSON({
+        url: `${env.APP_URL}/resource/upvote/job/batch`,
+        delay: "60s", // 1 minute delay to collect operations
+      });
+
+      // Set sentinel key to expire in 70 seconds (slightly longer than the delay)
+      await redisIo.set("upvote:batch:scheduled", 1, "EX", 70);
+      logger.info("Scheduled new batch upvote processing job");
+    }
+
+    return c.json(
+      { success: true, message: "Operation queued for batch processing" },
+      HttpStatusCodes.OK
+    );
+  } catch (error) {
+    console.error("Error in upvote queue handler:", error);
+    return c.json(
+      { success: false, message: "Internal server error" },
+      HttpStatusCodes.INTERNAL_SERVER_ERROR
+    );
+  }
+};
+export const upvoteJobBatch = async (c: Context) => {
+  const { logger } = c.var;
+  try {
+    // Process configuration
+    const BATCH_SIZE = 50; // Maximum operations to process in one batch
+    let processedOperations = 0;
+    let failedOperations = 0;
+
+    // Process removes first (usually fewer and important for consistency)
+    let removeOps = await processBatch(
+      "upvote:batch:remove",
+      BATCH_SIZE,
+      logger
+    );
+    processedOperations += removeOps.processed;
+    failedOperations += removeOps.failed;
+
+    // Then process adds
+    let addOps = await processBatch("upvote:batch:add", BATCH_SIZE, logger);
+    processedOperations += addOps.processed;
+    failedOperations += addOps.failed;
+
+    // Check if we need to schedule another batch job (if there are remaining operations)
+    const remainingAdds = await redisIo.llen("upvote:batch:add");
+    const remainingRemoves = await redisIo.llen("upvote:batch:remove");
+
+    if (remainingAdds > 0 || remainingRemoves > 0) {
+      // Schedule another job immediately
+      await qstashClient.publish({
+        url: `${env.APP_URL}/resource/upvote/job/batch`,
+        delay: "5s", // Short delay to prevent hammering the system
+        // Send a minimal payload to avoid empty body issues
+        body: JSON.stringify({ scheduled: true, followUp: true }),
+      });
+
+      // Update sentinel key
+      await redisIo.set("upvote:batch:scheduled", 1, "EX", 15);
+      logger.info(
+        `Scheduled follow-up batch job. Remaining operations: ${
+          remainingAdds + remainingRemoves
+        }`
+      );
+    }
+
+    return c.json(
+      {
+        success: true,
+        message: "Batch processing completed",
+        stats: {
+          processed: processedOperations,
+          failed: failedOperations,
+          remaining: remainingAdds + remainingRemoves,
+        },
+      },
+      HttpStatusCodes.OK
+    );
+  } catch (error) {
+    logger.error("Error in batch upvote job handler:", error);
+    return c.json(
+      { success: false, message: "Internal server error" },
+      HttpStatusCodes.INTERNAL_SERVER_ERROR
+    );
+  }
 };

@@ -191,29 +191,78 @@ export const getUsersResources = createRoute({
     ),
   },
 });
-// export const upvote = createRoute({
-//   path: "/resource/upvote/{id}",
-//   method: "patch",
-//   tags,
-//   responses: {
-//     [HttpStatusCodes.OK]: jsonContent(
-//       z.object({
-//         count: z.number(),
-//         success: z.boolean().default(false),
-//         resourceId: z.string(),
-//       }),
-//       "The upvote was successful"
-//     ),
-//     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
-//       z.object({ message: z.string(), success: z.boolean().default(false) }),
-//       "Unauthorized"
-//     ),
-//   },
-// });
+export const upvote = createRoute({
+  path: "/resource/upvote/{id}",
+  method: "patch",
+  tags,
+  request: {
+    params: ResourceParamsSchema,
+  },
+  responses: {
+    [HttpStatusCodes.OK]: jsonContent(
+      z.object({
+        count: z.number(),
+        success: z.boolean().default(true),
+        resourceId: z.string(),
+      }),
+      "The upvote was successful"
+    ),
+    [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Unauthorized"
+    ),
+    [HttpStatusCodes.NOT_FOUND]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Resource not found"
+    ),
+    [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Internal Server Error"
+    ),
+  },
+});
+export const upvoteQueue = createRoute({
+  path: "/resource/upvote/queue",
+  method: "post",
+  tags,
+  request: {
+    body: jsonContent(
+      z.object({
+        resourceId: z.string(),
+        userId: z.string(),
+        action: z.enum(["add", "remove"]),
+        timestamp: z.coerce.date().default(() => new Date()),
+      }),
+      "Add Upvote Job to the queue"
+    ),
+  },
+  responses: {
+    [HttpStatusCodes.OK]: jsonContent(
+      z.object({
+        success: z.boolean().default(true),
+        message: z.string(),
+      }),
+      "Job was successful"
+    ),
+    [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Unauthorized"
+    ),
+    [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Internal Server Error"
+    ),
+    [HttpStatusCodes.BAD_REQUEST]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Bad Request"
+    ),
+  },
+});
 export type GetAllRoute = typeof getAll;
 export type CreateRoute = typeof create;
 export type GetOne = typeof getOne;
 export type PatchRoute = typeof patch;
 export type PublishRoute = typeof publish;
 export type GetUsersResources = typeof getUsersResources;
-// export type UpvoteRoute = typeof upvote;
+export type UpvoteRoute = typeof upvote;
+export type UpvoteQueueRoute = typeof upvoteQueue;

@@ -29,6 +29,7 @@ const EnvSchema = z
     DATABASE_URL: z.string().url(),
     BETTER_AUTH_SECRET: z.string().min(1),
     BETTER_AUTH_URL: z.string().url(),
+    APP_URL: z.string().url(),
     ORIGIN_URL: z.string().url(),
     EMAIL_VERIFICATION_CALLBACK_URL: z.string().min(1),
     RESEND_API_KEY: z.string().min(1),
@@ -40,6 +41,11 @@ const EnvSchema = z
     UPSTASH_REDIS_REST_URL: z.string().url(),
     UPSTASH_REDIS_REST_TOKEN: z.string().min(1),
     UPLOADTHING_TOKEN: z.string().min(1),
+    REDIS_URL: z.string().url(),
+    QSTASH_URL: z.string().url(),
+    QSTASH_TOKEN: z.string().min(1),
+    QSTASH_CURRENT_SIGNING_KEY: z.string().min(1).startsWith("sig"),
+    QSTASH_NEXT_SIGNING_KEY: z.string().min(1).startsWith("sig"),
   })
   .superRefine((input, ctx) => {
     if (input.NODE_ENV === "production" && !input.DATABASE_URL) {

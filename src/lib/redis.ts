@@ -1,5 +1,4 @@
 import { Redis as RedisUpstash } from "@upstash/redis";
-import { Env } from "./types";
 import Redis from "ioredis";
 import env from "./env";
 export const redis = new RedisUpstash({
@@ -7,11 +6,12 @@ export const redis = new RedisUpstash({
   token: env.UPSTASH_REDIS_REST_TOKEN,
 });
 
-export const redisPublisher = (env: Env["Bindings"]) => {
-  const redisPub = new Redis(env.UPSTASH_REDIS_REST_URL);
-  return redisPub;
-};
-export const redisSubscriber = (env: Env["Bindings"]) => {
-  const redisSub = new Redis(env.UPSTASH_REDIS_REST_URL);
-  return redisSub;
-};
+export const redisIo = new Redis(env.REDIS_URL);
+redisIo.on("error", (err) => {
+  console.error("Redis IO client error:", err);
+});
+
+export const redisSubscriber = new Redis(env.REDIS_URL);
+redisSubscriber.on("error", (err) => {
+  console.error("Redis Subscriber client error:", err);
+});
