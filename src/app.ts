@@ -9,7 +9,7 @@ import { isAuth } from "./middlewares/is-auth";
 import { createRouteHandler } from "uploadthing/server";
 import { uploadRouter } from "./lib/uploadthing";
 import env from "./lib/env";
-import { redisSubscriber } from "./lib/redis";
+import { redisIo, redisSubscriber } from "./lib/redis";
 import { Context } from "hono";
 import { qstashReceiver } from "./lib/qstash";
 import { syncUpvoteCount } from "./lib/utils";
@@ -127,28 +127,32 @@ routes.forEach((route) => {
 const upvoteEventKey = "upvote-events";
 app.get("/stream", (c: Context) => {
   const connectionId = crypto.randomUUID();
-  console.log(`Client ${connectionId} connected to upvote stream`);
+  const { logger } = c.var;
+  logger.info(`Client ${connectionId} connected to upvote stream`);
+
+  // Create a dedicated Redis subscriber for this connection
+  const dedicatedSubscriber = redisIo.duplicate();
+
   const stream = new ReadableStream({
     start(controller) {
       controller.enqueue(
         `data: ${JSON.stringify({ type: "connected", connectionId })}\n\n`
       );
+
       const onMessage = (_channel: string, message: string) => {
         try {
           controller.enqueue(`data: ${message}\n\n`);
         } catch (err) {
-          console.warn(
-            `Stream ${connectionId} closed. Cannot enqueue message.`
-          );
+          logger.warn(`Stream ${connectionId} closed. Cannot enqueue message.`);
         }
       };
 
       // Subscribe to Redis Pub/Sub
       const subscribe = async () => {
         try {
-          await redisSubscriber.subscribe(upvoteEventKey);
+          await dedicatedSubscriber.subscribe(upvoteEventKey);
         } catch (err) {
-          console.error(`Redis subscription error for ${connectionId}:`, err);
+          logger.error(`Redis subscription error for ${connectionId}:`, err);
 
           // Try to resubscribe after delay
           setTimeout(subscribe, 5000);
@@ -157,7 +161,8 @@ app.get("/stream", (c: Context) => {
 
       subscribe();
 
-      redisSubscriber.on("message", onMessage);
+      dedicatedSubscriber.on("message", onMessage);
+
       let keepAliveDelay = 15000; // Start with 15s
       let consecutiveErrors = 0;
       const sendKeepAlive = () => {
@@ -168,7 +173,7 @@ app.get("/stream", (c: Context) => {
         } catch (err) {
           consecutiveErrors++;
           keepAliveDelay = Math.min(keepAliveDelay * 2, 120000); // Max 2 minutes
-          console.warn(
+          logger.warn(
             `Keep-alive failed for ${connectionId}. Increasing delay to ${keepAliveDelay}ms.`
           );
         }
@@ -179,11 +184,21 @@ app.get("/stream", (c: Context) => {
       let keepAliveTimer = setTimeout(sendKeepAlive, keepAliveDelay);
 
       // Handle client disconnects
-      c.req.raw.signal.addEventListener("abort", () => {
-        console.log(`Client ${connectionId} disconnected from upvote stream`);
+      c.req.raw.signal.addEventListener("abort", async () => {
+        logger.info(`Client ${connectionId} disconnected from upvote stream`);
         clearTimeout(keepAliveTimer);
-        redisSubscriber.unsubscribe(upvoteEventKey).catch(console.error);
-        controller.close();
+
+        // Cleanup Redis subscription
+        dedicatedSubscriber.off("message", onMessage);
+        try {
+          await dedicatedSubscriber.unsubscribe(upvoteEventKey);
+          await dedicatedSubscriber.quit();
+        } catch (err) {
+          logger.error(`Error cleaning up Redis for ${connectionId}:`, err);
+        }
+
+        // Skip calling controller.close() as the browser disconnect
+        // will automatically close the controller
       });
     },
   });
@@ -196,5 +211,4 @@ app.get("/stream", (c: Context) => {
     },
   });
 });
-
 export default app;

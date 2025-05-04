@@ -195,11 +195,14 @@ export const upvote = createRoute({
   path: "/resource/upvote/{id}",
   method: "patch",
   tags,
+  request: {
+    params: ResourceParamsSchema,
+  },
   responses: {
     [HttpStatusCodes.OK]: jsonContent(
       z.object({
         count: z.number(),
-        success: z.boolean().default(false),
+        success: z.boolean().default(true),
         resourceId: z.string(),
       }),
       "The upvote was successful"
@@ -236,7 +239,7 @@ export const upvoteQueue = createRoute({
   responses: {
     [HttpStatusCodes.OK]: jsonContent(
       z.object({
-        success: z.boolean().default(false),
+        success: z.boolean().default(true),
         message: z.string(),
       }),
       "Job was successful"

@@ -30,6 +30,7 @@ import env from "@/lib/env";
 import type { PinoLogger } from "hono-pino";
 import { Context } from "hono";
 const GETALL_TTL = 60 * 2; // 2 minutes
+
 async function processBatch(
   listKey: string,
   batchSize: number,
@@ -38,11 +39,14 @@ async function processBatch(
   let processed = 0;
   let failed = 0;
 
-  // Get batch of operations (without removing them yet)
-  const operations = await redisIo.lrange(listKey, 0, batchSize - 1);
+  // Process operations in a loop, atomically popping one item at a time
+  for (let i = 0; i < batchSize; i++) {
+    // LPOP atomically removes and returns the first element of the list
+    const opStr = await redisIo.lpop(listKey);
 
-  // Process each operation in the batch
-  for (const opStr of operations) {
+    // Exit the loop if the list is empty
+    if (!opStr) break;
+
     try {
       const op = JSON.parse(opStr);
       const { userId, resourceId, action } = op;
@@ -87,17 +91,13 @@ async function processBatch(
         );
       }
 
-      // Remove the processed operation from Redis
-      await redisIo.lrem(listKey, 1, opStr);
       processed++;
     } catch (error) {
       logger.error(`Failed to process operation: ${opStr}`, error);
       failed++;
 
-      // For failed operations, we might want to move them to a dead letter queue
-      // This helps prevent blocking the whole batch processing
+      // Move failed operations to a dead letter queue
       await redisIo.rpush(`${listKey}:failed`, opStr);
-      await redisIo.lrem(listKey, 1, opStr);
     }
   }
 
@@ -858,6 +858,10 @@ export const upvote: AppRouteHandler<UpvoteRoute> = async (c) => {
       // Remove upvote from Redis
       await redisIo.del(upvoteKey);
       newCount = await redisIo.decr(countKey);
+      if (newCount < 0) {
+        newCount = 0;
+        await redisIo.set(countKey, 0);
+      }
 
       // Queue the removal operation
       await qstashClient.publishJSON({

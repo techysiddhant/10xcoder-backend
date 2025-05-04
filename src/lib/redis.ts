@@ -7,8 +7,11 @@ export const redis = new RedisUpstash({
 });
 
 export const redisIo = new Redis(env.REDIS_URL);
-// export const redisPublisher = (env: Env["Bindings"]) => {
-//   const redisPub = new Redis(env.UPSTASH_REDIS_REST_URL);
-//   return redisPub;
-// };
+redisIo.on("error", (err) => {
+  console.error("Redis IO client error:", err);
+});
+
 export const redisSubscriber = new Redis(env.REDIS_URL);
+redisSubscriber.on("error", (err) => {
+  console.error("Redis Subscriber client error:", err);
+});
