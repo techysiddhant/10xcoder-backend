@@ -3,6 +3,7 @@ import { count } from "drizzle-orm/sql";
 
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import {
+  bookmarks,
   categories,
   resources,
   resourceTags,
@@ -13,6 +14,7 @@ import {
 import { isResourceType } from "@/lib/utils";
 import type { AppRouteHandler, ResourceTag } from "@/lib/types";
 import type {
+  AddRemoveBookmarkRoute,
   CreateRoute,
   GetAllRoute,
   GetOne,
@@ -21,15 +23,77 @@ import type {
   PublishRoute,
   UpvoteQueueRoute,
   UpvoteRoute,
+  UserBookmarksRoute,
 } from "./resources.routes";
-import { redis, redisIo } from "@/lib/redis";
+import { CACHE_VERSIONS, redis, redisIo } from "@/lib/redis";
 import db from "@/db";
 import { alias } from "drizzle-orm/pg-core";
 import { qstashClient, qstashReceiver } from "@/lib/qstash";
 import env from "@/lib/env";
 import type { PinoLogger } from "hono-pino";
 import { Context } from "hono";
+import { Redis } from "@upstash/redis";
 const GETALL_TTL = 60 * 2; // 2 minutes
+export const invalidateUserBookmarksCache = async (
+  userId: string,
+  redis: Redis,
+  logger: PinoLogger
+): Promise<void> => {
+  try {
+    // The cache version should match what's used in the userBookmarks handler
+
+    // Pattern for user's bookmarks cache keys
+    const pattern = `bookmarks:${CACHE_VERSIONS.BOOKMARKS}:user:${userId}:cursor:*`;
+
+    // For Upstash Redis, we need to use the raw SCAN command
+    // Initialize scan cursor to 0
+    let cursor = 0;
+    const keysToDelete: string[] = [];
+
+    do {
+      // Execute SCAN command with the pattern
+      // @ts-ignore - Upstash Redis may have different typings
+      const [nextCursor, keys] = await redis.scan(cursor, {
+        match: pattern,
+        count: 100, // Scan 100 keys at a time
+      });
+
+      // Convert nextCursor to number
+      cursor =
+        typeof nextCursor === "string" ? parseInt(nextCursor, 10) : nextCursor;
+
+      // Add found keys to our list
+      if (keys && Array.isArray(keys) && keys.length > 0) {
+        keysToDelete.push(...keys);
+      }
+
+      // Continue until cursor is 0
+    } while (cursor !== 0);
+
+    // Delete keys in batches to avoid command size limits
+    if (keysToDelete.length > 0) {
+      // Delete in batches of 100 keys
+      const batchSize = 100;
+      for (let i = 0; i < keysToDelete.length; i += batchSize) {
+        const batch = keysToDelete.slice(i, i + batchSize);
+        if (batch.length > 0) {
+          await redis.del(...batch);
+        }
+      }
+      logger.info(
+        `Invalidated ${keysToDelete.length} bookmark cache keys for user ${userId}`
+      );
+    } else {
+      logger.debug(`No bookmark cache keys found for user ${userId}`);
+    }
+  } catch (error) {
+    logger.error(
+      `Error invalidating bookmark cache for user ${userId}:`,
+      error
+    );
+    // We don't throw here, as cache invalidation failure should not break the main operation
+  }
+};
 
 async function processBatch(
   listKey: string,
@@ -127,7 +191,42 @@ async function deleteResourceKeys(pattern: string) {
   console.log(`✅ Deleted ${keysToDelete.length} keys`);
 }
 const getUpvoteCountKey = (resourceId: string) => `upvote:count:${resourceId}`;
+/**
+ * Get the bookmark count for a resource from Redis or database
+ * @param resourceId - The ID of the resource
+ * @param redis - Redis client instance
+ * @param logger - Logger instance
+ * @returns The number of bookmarks for the resource
+ */
+export const getResourceBookmarkCount = async (
+  resourceId: string,
+  redis: Redis,
+  logger: PinoLogger
+): Promise<number> => {
+  try {
+    const key = getResourceBookmarkCountKey(resourceId);
 
+    // Try to get from Redis first
+    const cachedCount = await redis.get(key);
+
+    if (cachedCount !== null) {
+      return Number(cachedCount);
+    }
+
+    // If not in Redis, initialize from database
+    await initializeResourceBookmarkCount(resourceId, redis, logger);
+
+    // Get the newly set value
+    const newCachedCount = await redis.get(key);
+    return Number(newCachedCount || 0);
+  } catch (error) {
+    logger.error(
+      `Error getting bookmark count for resource ${resourceId}:`,
+      error
+    );
+    return 0; // Default to 0 on error
+  }
+};
 export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const resourceType = c.req.query("resourceType") ?? "";
   const categoryName = c.req.query("category") ?? "";
@@ -162,6 +261,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   // Generate a full cache key including cursor and limit
   const cacheKey = [
     "resources:",
+    `user:${userLoggedIn?.id || "guest"}`,
     `type:${resourceType}`,
     `category:${categoryName}`,
     `tags:${tags.sort().join(",")}`,
@@ -175,6 +275,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
       const data = typeof cached === "string" ? cached : JSON.stringify(cached);
       return c.json(JSON.parse(data), HttpStatusCodes.OK);
     }
+    const userId = userLoggedIn?.id;
     // Build where clause
     const baseWhere = and(
       eq(resources.isPublished, true), // ✅ Ensure only published resources are included
@@ -198,6 +299,16 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
         updatedAt: resources.updatedAt,
         categoryName: categories.name,
         language: resources.language,
+        // Add isBookmarked flag using a CASE statement
+        // If user is logged in, check if resource is bookmarked by user
+        // If user is not logged in, set isBookmarked to false for all resources
+        isBookmarked: userId
+          ? sql<boolean>`EXISTS (
+        SELECT 1 FROM ${bookmarks} 
+        WHERE ${bookmarks.resourceId} = ${resources.id} 
+        AND ${bookmarks.userId} = ${userId}
+      )`
+          : sql`false`,
       })
       .from(resources)
       .innerJoin(categories, eq(resources.categoryId, categories.id))
@@ -442,6 +553,7 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
 export const getOne: AppRouteHandler<GetOne> = async (c) => {
   const { id } = c.req.param(); // assumes /resource/:id
   const userLogged = c.get("user");
+  const { logger } = c.var;
   const cacheKey = `resource:${id}:user:${userLogged?.id || "guest"}`;
 
   const cached = await redis.get(cacheKey);
@@ -549,12 +661,19 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
       });
     }
   }
+  // Get updated count after operation
+  const updatedCount = await getResourceBookmarkCount(
+    resource.id,
+    redis,
+    logger
+  );
 
   const finalData = {
     ...resource,
     tags,
     upvoteCount,
     hasUpvoted,
+    bookmarkCount: updatedCount,
   };
 
   await redis.set(cacheKey, JSON.stringify(finalData), { ex: 600 });
@@ -909,7 +1028,7 @@ export const upvote: AppRouteHandler<UpvoteRoute> = async (c) => {
 
     // Invalidate cache
     await redisIo.del(resourceSingleKeyUser);
-    await deleteResourceKeys(`resources:*`);
+    await deleteResourceKeys(`resources:|user:${userLoggedIn.id}*`);
 
     // Publish real-time event
     await redisIo.publish(
@@ -1076,6 +1195,394 @@ export const upvoteJobBatch = async (c: Context) => {
     );
   } catch (error) {
     logger.error("Error in batch upvote job handler:", error);
+    return c.json(
+      { success: false, message: "Internal server error" },
+      HttpStatusCodes.INTERNAL_SERVER_ERROR
+    );
+  }
+};
+/**
+ * Get the Redis key for a resource's bookmark count
+ * @param resourceId - The ID of the resource
+ * @returns The Redis key for the bookmark count
+ */
+export const getResourceBookmarkCountKey = (resourceId: string): string => {
+  return `resource:${CACHE_VERSIONS.BOOKMARKS}:${resourceId}:bookmark:count`;
+};
+/**
+ * Update bookmark count in Redis for a resource
+ * @param resourceId - The ID of the resource
+ * @param increment - Whether to increment (true) or decrement (false) the count
+ * @param redis - Redis client instance
+ * @param logger - Logger instance
+ */
+export const updateResourceBookmarkCount = async (
+  resourceId: string,
+  increment: boolean,
+  redis: Redis,
+  logger: PinoLogger
+): Promise<void> => {
+  try {
+    const key = getResourceBookmarkCountKey(resourceId);
+
+    // First check if the key exists
+    const exists = await redis.exists(key);
+
+    if (exists) {
+      // Increment or decrement the existing count
+      if (increment) {
+        await redis.incr(key);
+      } else {
+        // Ensure we don't go below zero
+        await redis.eval(
+          // Lua script to decrement only if value is > 0
+          `local current = redis.call('get', KEYS[1])
+           if current and tonumber(current) > 0 then
+             return redis.call('decr', KEYS[1])
+           else
+             redis.call('set', KEYS[1], '0')
+             return 0
+           end`,
+          [key], // Array of keys
+          [] // Array of args (empty in this case)
+        );
+      }
+    } else if (increment) {
+      // Key doesn't exist, get accurate count from database
+      await initializeResourceBookmarkCount(resourceId, redis, logger);
+    } else {
+      // We're trying to decrement a non-existent key, just set to 0
+      await redis.set(key, 0);
+    }
+
+    // Set expiration to prevent stale counts
+    await redis.expire(key, 60 * 60 * 24 * 30); // 30 days TTL
+  } catch (error) {
+    logger.error(
+      `Error updating bookmark count for resource ${resourceId}:`,
+      error
+    );
+    // Non-blocking - we don't want to fail the main operation
+  }
+};
+/**
+ * Initialize the bookmark count for a resource by querying the database
+ * @param resourceId - The ID of the resource
+ * @param redis - Redis client instance
+ * @param logger - Logger instance
+ */
+export const initializeResourceBookmarkCount = async (
+  resourceId: string,
+  redis: Redis,
+  logger: PinoLogger
+): Promise<void> => {
+  try {
+    // Get actual count from database
+    const result = await db
+      .select({ count: sql`count(*)` })
+      .from(bookmarks)
+      .where(eq(bookmarks.resourceId, resourceId));
+
+    const count = Number(result[0]?.count || 0);
+    const key = getResourceBookmarkCountKey(resourceId);
+
+    // Store count in Redis with TTL
+    await redis.set(key, count, { ex: 60 * 60 * 24 * 30 }); // 30 days TTL
+    logger.debug(
+      `Initialized bookmark count for resource ${resourceId}: ${count}`
+    );
+  } catch (error) {
+    logger.error(
+      `Error initializing bookmark count for resource ${resourceId}:`,
+      error
+    );
+  }
+};
+
+export const addOrRemoveBookmark: AppRouteHandler<
+  AddRemoveBookmarkRoute
+> = async (c) => {
+  const { resourceId } = c.req.param();
+  const userLoggedIn = c.get("user");
+  const { logger } = c.var;
+  const userResourceKey = `resource:${resourceId}:user:${
+    userLoggedIn?.id || "guest"
+  }`;
+
+  if (!userLoggedIn || !userLoggedIn.id) {
+    return c.json(
+      {
+        message: "Unauthorized: Authentication required",
+        success: false,
+      },
+      HttpStatusCodes.UNAUTHORIZED
+    );
+  }
+
+  try {
+    const [existing] = await db
+      .select()
+      .from(resources)
+      .where(
+        and(eq(resources.id, resourceId), eq(resources.isPublished, true))
+      );
+
+    if (!existing) {
+      return c.json(
+        {
+          message: "Resource not found",
+          success: false,
+        },
+        HttpStatusCodes.NOT_FOUND
+      );
+    }
+
+    const isBookmarked = await db
+      .select({ id: bookmarks.id })
+      .from(bookmarks)
+      .where(
+        and(
+          eq(bookmarks.resourceId, resourceId),
+          eq(bookmarks.userId, userLoggedIn.id)
+        )
+      );
+
+    const wasBookmarked = isBookmarked.length > 0;
+
+    if (!wasBookmarked) {
+      // Add bookmark
+      await db.insert(bookmarks).values({
+        resourceId,
+        userId: userLoggedIn.id,
+      });
+      logger.info(
+        `Added bookmark for resource ${resourceId} by user ${userLoggedIn.id}`
+      );
+
+      // Increment bookmark count in Redis
+      await updateResourceBookmarkCount(resourceId, true, redis, logger);
+    } else {
+      // Remove bookmark
+      await db
+        .delete(bookmarks)
+        .where(
+          and(
+            eq(bookmarks.resourceId, resourceId),
+            eq(bookmarks.userId, userLoggedIn.id)
+          )
+        );
+      logger.info(
+        `Removed bookmark for resource ${resourceId} by user ${userLoggedIn.id}`
+      );
+
+      // Decrement bookmark count in Redis
+      await updateResourceBookmarkCount(resourceId, false, redis, logger);
+    }
+
+    // Invalidate user's bookmarks cache
+    await invalidateUserBookmarksCache(userLoggedIn.id, redis, logger);
+    await deleteResourceKeys(`resources:|user:${userLoggedIn.id}*`);
+    await redis.del(userResourceKey);
+
+    return c.json(
+      {
+        success: true,
+        resourceId,
+        message: wasBookmarked ? "Removed" : "Added",
+        isBookmarked: !wasBookmarked,
+      },
+      wasBookmarked ? HttpStatusCodes.OK : HttpStatusCodes.CREATED
+    );
+  } catch (error) {
+    logger.error("Error in add or remove bookmark handler:", error);
+    return c.json(
+      { success: false, message: "Internal server error" },
+      HttpStatusCodes.INTERNAL_SERVER_ERROR
+    );
+  }
+};
+
+export const userBookmarks: AppRouteHandler<UserBookmarksRoute> = async (c) => {
+  const userLoggedIn = c.get("user");
+  const { logger } = c.var;
+
+  // Early authentication check
+  if (!userLoggedIn || !userLoggedIn.id) {
+    return c.json(
+      {
+        message: "Unauthorized: Authentication required",
+        success: false,
+      },
+      HttpStatusCodes.UNAUTHORIZED
+    );
+  }
+
+  const cursor = c.req.query("cursor") ?? undefined;
+  const limit = 10;
+
+  // Improved cache key with version to facilitate future cache invalidation
+  const cacheKey = `bookmarks:${CACHE_VERSIONS.BOOKMARKS}:user:${
+    userLoggedIn.id
+  }:cursor:${cursor ?? "null"}`;
+  const CACHE_TTL = 60 * 60 * 24; // Increased to 24 hours for better performance
+
+  try {
+    // Try to get from cache first
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      const data = typeof cached === "string" ? cached : JSON.stringify(cached);
+      logger.debug(`Cache hit for ${cacheKey}`);
+      return c.json(JSON.parse(data), HttpStatusCodes.OK);
+    }
+
+    logger.debug(`Cache miss for ${cacheKey}, fetching from database`);
+
+    // Build where clause
+    const baseWhere = and(
+      eq(bookmarks.userId, userLoggedIn.id),
+      ...(cursor ? [lt(bookmarks.createdAt, new Date(cursor))] : [])
+    );
+
+    // Single query with limit+1 for pagination
+    const userBookmarksWithResources = await db
+      .select({
+        bookmark: bookmarks,
+        resource: resources,
+      })
+      .from(bookmarks)
+      .innerJoin(resources, eq(bookmarks.resourceId, resources.id))
+      .where(baseWhere)
+      .limit(limit + 1)
+      .orderBy(desc(bookmarks.createdAt));
+
+    // Early exit if no results to avoid unnecessary processing
+    if (userBookmarksWithResources.length === 0) {
+      const emptyResponse = { bookmarks: [], nextCursor: null };
+      await redis.set(cacheKey, emptyResponse, { ex: CACHE_TTL });
+      return c.json(emptyResponse, HttpStatusCodes.OK);
+    }
+
+    const resourceIds = userBookmarksWithResources.map((r) => r.resource.id);
+
+    // Batch Redis operations in a single pipeline
+    const pipeline = redis.pipeline();
+
+    // 1. Get all upvote counts
+    const countKeys = resourceIds.map(getUpvoteCountKey);
+    pipeline.mget(...countKeys);
+
+    // 2. Get user upvote status in the same pipeline if user is logged in
+    const upvoteKeys = resourceIds.map(
+      (id) => `upvote:user:${userLoggedIn.id}:resource:${id}`
+    );
+    pipeline.mget(...upvoteKeys);
+
+    // Execute all Redis reads in one round trip
+    const [upvoteCountsResult, userUpvotesResult] = await pipeline.exec();
+
+    // Process upvote counts from Redis
+    const upvoteCounts = new Map();
+    const missingIds = [];
+
+    // Process upvote counts
+    for (let i = 0; i < resourceIds.length; i++) {
+      const resourceId = resourceIds[i];
+      const redisCount = Array.isArray(upvoteCountsResult)
+        ? upvoteCountsResult[i]
+        : null;
+
+      if (redisCount !== null && redisCount !== undefined) {
+        upvoteCounts.set(resourceId, Number(redisCount));
+      } else {
+        missingIds.push(resourceId);
+        upvoteCounts.set(resourceId, 0); // Default to 0 initially
+      }
+    }
+
+    // Process user upvotes
+    const userUpvotes = new Map();
+    for (let i = 0; i < resourceIds.length; i++) {
+      const redisUpvote = Array.isArray(userUpvotesResult)
+        ? userUpvotesResult[i]
+        : null;
+      userUpvotes.set(resourceIds[i], Boolean(redisUpvote));
+    }
+
+    // Only query DB for missing upvote counts if we have missing counts
+    if (missingIds.length > 0) {
+      // Efficient SQL with prepared parameters
+      const dbCounts = await db.execute(sql`
+        SELECT resource_id, COUNT(*) as count
+        FROM resource_upvotes
+        WHERE resource_id IN (${sql.join(
+          missingIds.map((id) => sql`${id}`),
+          sql`, `
+        )})
+        GROUP BY resource_id
+      `);
+
+      // Update Redis in a single pipeline
+      const updatePipeline = redis.pipeline();
+      const UPVOTE_COUNT_TTL = 60 * 60 * 24 * 30; // Increased to 30 days
+
+      // Update counts from DB results
+      dbCounts.forEach((row) => {
+        const resourceId = row.resource_id;
+        const count = Number(row.count);
+        upvoteCounts.set(resourceId, count);
+        updatePipeline.set(getUpvoteCountKey(String(resourceId)), count, {
+          ex: UPVOTE_COUNT_TTL,
+        });
+      });
+
+      // Set 0 counts for any remaining IDs
+      missingIds.forEach((id) => {
+        if (!dbCounts.some((row) => row.resource_id === id)) {
+          updatePipeline.set(getUpvoteCountKey(id), 0, {
+            ex: UPVOTE_COUNT_TTL,
+          });
+        }
+      });
+
+      // Execute all Redis writes in one batch
+      await updatePipeline.exec();
+    }
+
+    // Process final data
+    let finalData = userBookmarksWithResources.map((res) => {
+      return {
+        id: res.bookmark.id,
+        userId: res.bookmark.userId,
+        resourceId: res.bookmark.resourceId,
+        createdAt: res.bookmark.createdAt,
+        updatedAt: res.bookmark.updatedAt,
+        resource: {
+          ...res.resource,
+          upvoteCount: upvoteCounts.get(res.resource.id) || 0,
+          hasUpvoted: userUpvotes.get(res.resource.id) || false,
+        },
+      };
+    });
+
+    // Handle pagination
+    let nextCursor: string | null = null;
+    if (finalData.length > limit) {
+      const nextItem = finalData.pop();
+      nextCursor = nextItem?.createdAt.toISOString() ?? null;
+    }
+
+    const response = {
+      bookmarks: finalData,
+      nextCursor,
+    };
+
+    // Cache the final result
+    await redis.set(cacheKey, JSON.stringify(response), { ex: CACHE_TTL });
+
+    logger.debug(`Bookmarks data cached with key ${cacheKey}`);
+    return c.json(response, HttpStatusCodes.OK);
+  } catch (error) {
+    logger.error("Error in user bookmarks handler:", error);
     return c.json(
       { success: false, message: "Internal server error" },
       HttpStatusCodes.INTERNAL_SERVER_ERROR

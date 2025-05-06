@@ -15,3 +15,7 @@ export const redisSubscriber = new Redis(env.REDIS_URL);
 redisSubscriber.on("error", (err) => {
   console.error("Redis Subscriber client error:", err);
 });
+
+export const CACHE_VERSIONS = {
+  BOOKMARKS: "V1",
+};
