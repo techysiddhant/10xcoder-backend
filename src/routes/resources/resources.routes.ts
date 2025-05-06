@@ -26,7 +26,7 @@ export const getAll = createRoute({
     ),
     [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Resources not found"
+      "Internal Server Error"
     ),
   },
 });
