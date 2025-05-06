@@ -136,6 +136,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const cursor = c.req.query("cursor") ?? undefined;
   const rawLimit = c.req.query("limit") ?? "10";
   const limit = Number.parseInt(rawLimit, 10);
+  const { logger } = c.var;
   if (Number.isNaN(limit) || limit < 10 || limit > 50) {
     return c.json(
       { message: "Invalid limit", success: false },
@@ -167,81 +168,81 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
     `cursor:${cursor ?? "null"}`,
     `limit:${limit}`,
   ].join("|");
-
-  // Try Redis Cache first
-  const cached = await redis.get(cacheKey);
-  if (cached) {
-    const data = typeof cached === "string" ? cached : JSON.stringify(cached);
-    return c.json(JSON.parse(data), HttpStatusCodes.OK);
-  }
-
-  // Build where clause
-  const baseWhere = and(
-    eq(resources.isPublished, true), // ✅ Ensure only published resources are included
-    ...(resourceType && isResourceType(resourceType)
-      ? [eq(resources.resourceType, resourceType)]
-      : []),
-    ...(categoryName ? [eq(categories.name, categoryName)] : []),
-    ...(tags.length > 0 ? [inArray(resourceTags.name, tags)] : []),
-    ...(cursor ? [lt(resources.createdAt, new Date(cursor))] : [])
-  );
-
-  const filteredResources = await db
-    .selectDistinctOn([resources.createdAt], {
-      id: resources.id,
-      title: resources.title,
-      description: resources.description,
-      url: resources.url,
-      image: resources.image,
-      resourceType: resources.resourceType,
-      categoryId: resources.categoryId,
-      createdAt: resources.createdAt,
-      updatedAt: resources.updatedAt,
-      categoryName: categories.name,
-      language: resources.language,
-    })
-    .from(resources)
-    .innerJoin(categories, eq(resources.categoryId, categories.id))
-    .leftJoin(resourceToTag, eq(resourceToTag.resourceId, resources.id))
-    .leftJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
-    .where(baseWhere)
-    .groupBy(resources.id, categories.id)
-    .having(
-      tags.length > 0
-        ? sql`COUNT(DISTINCT ${resourceTags.name}) = ${tags.length}`
-        : undefined
-    )
-    .orderBy(desc(resources.createdAt), desc(resources.id))
-    .limit(limit + 1); // limit + 1 for nextCursor
-
-  const resourceIds = filteredResources.map((r) => r.id);
-
-  // First try to get all upvote counts from Redis in a single batch operation
-  const countKeys = resourceIds.map(getUpvoteCountKey);
-  const redisCounts = await redis.mget(...countKeys);
-
-  // Build a map of resource ID to upvote count
-  const upvoteCounts = new Map();
-
-  // Process the results from Redis
-  for (let i = 0; i < resourceIds.length; i++) {
-    const resourceId = resourceIds[i];
-    const redisCount = redisCounts[i];
-
-    if (redisCount !== null) {
-      // Found in Redis
-      upvoteCounts.set(resourceId, Number(redisCount));
-    } else {
-      // Not found in Redis, will need to fetch from DB
-      upvoteCounts.set(resourceId, null);
+  try {
+    // Try Redis Cache first
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      const data = typeof cached === "string" ? cached : JSON.stringify(cached);
+      return c.json(JSON.parse(data), HttpStatusCodes.OK);
     }
-  }
+    // Build where clause
+    const baseWhere = and(
+      eq(resources.isPublished, true), // ✅ Ensure only published resources are included
+      ...(resourceType && isResourceType(resourceType)
+        ? [eq(resources.resourceType, resourceType)]
+        : []),
+      ...(categoryName ? [eq(categories.name, categoryName)] : []),
+      ...(tags.length > 0 ? [inArray(resourceTags.name, tags)] : []),
+      ...(cursor ? [lt(resources.createdAt, new Date(cursor))] : [])
+    );
+    const filteredResources = await db
+      .selectDistinctOn([resources.createdAt], {
+        id: resources.id,
+        title: resources.title,
+        description: resources.description,
+        url: resources.url,
+        image: resources.image,
+        resourceType: resources.resourceType,
+        categoryId: resources.categoryId,
+        createdAt: resources.createdAt,
+        updatedAt: resources.updatedAt,
+        categoryName: categories.name,
+        language: resources.language,
+      })
+      .from(resources)
+      .innerJoin(categories, eq(resources.categoryId, categories.id))
+      .leftJoin(resourceToTag, eq(resourceToTag.resourceId, resources.id))
+      .leftJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
+      .where(baseWhere)
+      .groupBy(resources.id, categories.id)
+      .having(
+        tags.length > 0
+          ? sql`COUNT(DISTINCT ${resourceTags.name}) = ${tags.length}`
+          : undefined
+      )
+      .orderBy(desc(resources.createdAt), desc(resources.id))
+      .limit(limit + 1); // limit + 1 for nextCursor
 
-  // For any missing counts, query the database
-  const missingIds = resourceIds.filter((id) => upvoteCounts.get(id) === null);
+    const resourceIds = filteredResources.map((r) => r.id);
 
-  if (missingIds.length > 0) {
-    const dbCounts = await db.execute(sql`
+    // First try to get all upvote counts from Redis in a single batch operation
+    const countKeys = resourceIds.map(getUpvoteCountKey);
+    const redisCounts =
+      resourceIds.length > 0 ? await redis.mget(...countKeys) : [];
+
+    // Build a map of resource ID to upvote count
+    const upvoteCounts = new Map();
+    // Process the results from Redis
+    for (let i = 0; i < resourceIds.length; i++) {
+      const resourceId = resourceIds[i];
+      const redisCount = redisCounts[i];
+
+      if (redisCount !== null) {
+        // Found in Redis
+        upvoteCounts.set(resourceId, Number(redisCount));
+      } else {
+        // Not found in Redis, will need to fetch from DB
+        upvoteCounts.set(resourceId, null);
+      }
+    }
+
+    // For any missing counts, query the database
+    const missingIds = resourceIds.filter(
+      (id) => upvoteCounts.get(id) === null
+    );
+
+    if (missingIds.length > 0) {
+      const dbCounts = await db.execute(sql`
       SELECT resource_id, COUNT(*) as count
       FROM resource_upvotes
       WHERE resource_id IN (${sql.join(
@@ -250,98 +251,102 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
       )})
       GROUP BY resource_id
     `);
-    // Update the counts map and cache in Redis
-    const pipeline = redis.pipeline();
-    const UPVOTE_COUNT_TTL = 60 * 60 * 24 * 7;
-    console.log("DB Counts", dbCounts);
-    dbCounts.forEach((row) => {
-      const resourceId = row.resource_id;
-      const count = Number(row.count);
-      upvoteCounts.set(resourceId, count);
-      // Cache this count in Redis
-      pipeline.set(getUpvoteCountKey(String(resourceId)), count, {
-        ex: UPVOTE_COUNT_TTL,
-      }); // 7 days TTL
-    });
-    // Any IDs not found in DB have 0 upvotes
-    missingIds.forEach((id) => {
-      if (upvoteCounts.get(id) === null) {
-        upvoteCounts.set(id, 0);
-        pipeline.set(getUpvoteCountKey(id), 0, {
+      // Update the counts map and cache in Redis
+      const pipeline = redis.pipeline();
+      const UPVOTE_COUNT_TTL = 60 * 60 * 24 * 7;
+      console.log("DB Counts", dbCounts);
+      dbCounts.forEach((row) => {
+        const resourceId = row.resource_id;
+        const count = Number(row.count);
+        upvoteCounts.set(resourceId, count);
+        // Cache this count in Redis
+        pipeline.set(getUpvoteCountKey(String(resourceId)), count, {
           ex: UPVOTE_COUNT_TTL,
-        });
-      }
-    });
-    // Execute all Redis operations in one round-trip
-    await pipeline.exec();
-  }
-  // Check if user has upvoted each resource (if logged in)
-  let userUpvotes = new Map();
-  if (userLoggedIn?.id) {
-    // Batch check user upvotes from Redis
-    const upvoteKeys = resourceIds.map(
-      (id) => `upvote:user:${userLoggedIn.id}:resource:${id}`
-    );
-    const userUpvoteResults = await redis.mget(...upvoteKeys);
+        }); // 7 days TTL
+      });
+      // Any IDs not found in DB have 0 upvotes
+      missingIds.forEach((id) => {
+        if (upvoteCounts.get(id) === null) {
+          upvoteCounts.set(id, 0);
+          pipeline.set(getUpvoteCountKey(id), 0, {
+            ex: UPVOTE_COUNT_TTL,
+          });
+        }
+      });
+      // Execute all Redis operations in one round-trip
+      await pipeline.exec();
+    }
+    // Check if user has upvoted each resource (if logged in)
+    let userUpvotes = new Map();
+    if (userLoggedIn?.id) {
+      // Batch check user upvotes from Redis
+      const upvoteKeys = resourceIds.map(
+        (id) => `upvote:user:${userLoggedIn.id}:resource:${id}`
+      );
+      const userUpvoteResults =
+        resourceIds.length > 0 ? await redis.mget(...upvoteKeys) : [];
 
-    // Build a map of resource ID to upvoted status
-    for (let i = 0; i < resourceIds.length; i++) {
-      userUpvotes.set(resourceIds[i], Boolean(userUpvoteResults[i]));
+      // Build a map of resource ID to upvoted status
+      for (let i = 0; i < resourceIds.length; i++) {
+        userUpvotes.set(resourceIds[i], Boolean(userUpvoteResults[i]));
+      }
+
+      // For any not found in Redis, we could query the database as well,
+      // but that's optional since the upvote endpoint will handle it
+    }
+    // Fetch tags for resources
+    const tagRows = await db
+      .select({
+        resourceId: resourceToTag.resourceId,
+        tagName: resourceTags.name,
+      })
+      .from(resourceToTag)
+      .innerJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
+      .where(inArray(resourceToTag.resourceId, [...resourceIds]));
+
+    const tagMap = new Map<string, string[]>();
+    for (const { resourceId, tagName } of tagRows) {
+      if (!tagMap.has(resourceId)) tagMap.set(resourceId, []);
+      tagMap.get(resourceId)!.push(tagName);
     }
 
-    // For any not found in Redis, we could query the database as well,
-    // but that's optional since the upvote endpoint will handle it
-  }
-  // Fetch tags for resources
-  const tagRows = await db
-    .select({
-      resourceId: resourceToTag.resourceId,
-      tagName: resourceTags.name,
-    })
-    .from(resourceToTag)
-    .innerJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
-    .where(inArray(resourceToTag.resourceId, [...resourceIds]));
+    // Attach tags
+    let finalData = filteredResources.map((res) => {
+      const upvoteCount = upvoteCounts.get(res.id) || 0;
+      const hasUpvoted = userLoggedIn?.id
+        ? userUpvotes.get(res.id) || false
+        : false;
+      return {
+        ...res,
+        tags: tagMap.get(res.id) ?? [],
+        upvoteCount,
+        hasUpvoted,
+      };
+    });
 
-  const tagMap = new Map<string, string[]>();
-  for (const { resourceId, tagName } of tagRows) {
-    if (!tagMap.has(resourceId)) tagMap.set(resourceId, []);
-    tagMap.get(resourceId)!.push(tagName);
-  }
+    // Handle nextCursor
+    let nextCursor: string | null = null;
+    if (finalData.length > limit) {
+      const nextItem = finalData.pop(); // remove extra
+      nextCursor = nextItem?.createdAt.toISOString() ?? null;
+    }
 
-  // Attach tags
-  // let finalData = filteredResources.map((res) => ({
-  //   ...res,
-  //   tags: tagMap.get(res.id) ?? [],
-  // }));
-  let finalData = filteredResources.map((res) => {
-    const upvoteCount = upvoteCounts.get(res.id) || 0;
-    const hasUpvoted = userLoggedIn?.id
-      ? userUpvotes.get(res.id) || false
-      : false;
-    return {
-      ...res,
-      tags: tagMap.get(res.id) ?? [],
-      upvoteCount,
-      hasUpvoted,
+    const response = {
+      resources: finalData,
+      nextCursor,
     };
-  });
 
-  // Handle nextCursor
-  let nextCursor: string | null = null;
-  if (finalData.length > limit) {
-    const nextItem = finalData.pop(); // remove extra
-    nextCursor = nextItem?.createdAt.toISOString() ?? null;
+    // Cache this page for 5 minutes
+    await redis.set(cacheKey, JSON.stringify(response), { ex: GETALL_TTL });
+
+    return c.json(response, HttpStatusCodes.OK);
+  } catch (error) {
+    logger.error("Error in GetALL handler:", error);
+    return c.json(
+      { success: false, message: "Internal server error" },
+      HttpStatusCodes.INTERNAL_SERVER_ERROR
+    );
   }
-
-  const response = {
-    resources: finalData,
-    nextCursor,
-  };
-
-  // Cache this page for 5 minutes
-  await redis.set(cacheKey, JSON.stringify(response), { ex: GETALL_TTL });
-
-  return c.json(response, HttpStatusCodes.OK);
 };
 
 export const create: AppRouteHandler<CreateRoute> = async (c) => {
