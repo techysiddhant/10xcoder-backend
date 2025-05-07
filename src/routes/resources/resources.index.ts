@@ -9,6 +9,8 @@ const router = createRouter()
   .openapi(routes.publish, handlers.publish)
   .openapi(routes.getUsersResources, handlers.getUsersResources)
   .openapi(routes.upvote, handlers.upvote)
-  .openapi(routes.upvoteQueue, handlers.upvoteQueue);
+  .openapi(routes.upvoteQueue, handlers.upvoteQueue)
+  .openapi(routes.addOrRemoveBookmark, handlers.addOrRemoveBookmark)
+  .openapi(routes.userBookmarks, handlers.userBookmarks);
 
 export default router;

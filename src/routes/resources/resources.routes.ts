@@ -1,6 +1,7 @@
 import {
   insertResourceSchema,
   patchResourceSchema,
+  selectBookmarkSchema,
   selectResourceSchema,
 } from "@/db/schema";
 import { createRoute, z } from "@hono/zod-openapi";
@@ -262,6 +263,77 @@ export const upvoteQueue = createRoute({
     ),
   },
 });
+export const addOrRemoveBookmark = createRoute({
+  path: "/resource/{resourceId}/bookmark",
+  method: "post",
+  tags,
+  request: {
+    params: z.object({
+      resourceId: z.string().min(3),
+    }),
+  },
+  responses: {
+    [HttpStatusCodes.CREATED]: jsonContent(
+      z.object({
+        success: z.boolean().default(true),
+        resourceId: z.string(),
+        message: z.string(),
+        isBookmarked: z.boolean(),
+      }),
+      "The Bookmark added"
+    ),
+    [HttpStatusCodes.OK]: jsonContent(
+      z.object({
+        success: z.boolean().default(true),
+        resourceId: z.string(),
+        message: z.string(),
+        isBookmarked: z.boolean(),
+      }),
+      "The Bookmark removed"
+    ),
+    [HttpStatusCodes.NOT_FOUND]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Resource not found"
+    ),
+    [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Internal Server Error"
+    ),
+    [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Unauthorized"
+    ),
+  },
+});
+export const userBookmarks = createRoute({
+  path: "/user/bookmarks",
+  method: "get",
+  tags,
+  request: {
+    query: z
+      .object({
+        cursor: z.string().optional(),
+      })
+      .partial(),
+  },
+  responses: {
+    [HttpStatusCodes.OK]: jsonContent(
+      z.object({
+        bookmarks: z.array(selectBookmarkSchema),
+        nextCursor: z.string().nullable(),
+      }),
+      "The User Bookmarks"
+    ),
+    [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Internal Server Error"
+    ),
+    [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
+      z.object({ message: z.string(), success: z.boolean().default(false) }),
+      "Unauthorized"
+    ),
+  },
+});
 export type GetAllRoute = typeof getAll;
 export type CreateRoute = typeof create;
 export type GetOne = typeof getOne;
@@ -270,3 +342,5 @@ export type PublishRoute = typeof publish;
 export type GetUsersResources = typeof getUsersResources;
 export type UpvoteRoute = typeof upvote;
 export type UpvoteQueueRoute = typeof upvoteQueue;
+export type AddRemoveBookmarkRoute = typeof addOrRemoveBookmark;
+export type UserBookmarksRoute = typeof userBookmarks;

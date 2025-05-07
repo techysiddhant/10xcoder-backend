@@ -10,6 +10,7 @@ import {
   uuid,
   primaryKey,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 export const user = pgTable("user", {
@@ -153,7 +154,31 @@ export const resourceUpvotes = pgTable(
     resourceIdx: index("resource_upvote_resource_idx").on(t.resourceId),
   })
 );
-
+export const bookmarks = pgTable(
+  "resource_bookmarks",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    resourceId: uuid("resource_id")
+      .notNull()
+      .references(() => resources.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+  },
+  (bookmarks) => ({
+    userIdIdx: index("user_id_bookmark_idx").on(bookmarks.userId),
+    resourceIdIdx: index("resource_id_bookmark_idx").on(bookmarks.resourceId),
+    // Add a unique composite index to prevent duplicate bookmarks
+    uniqueBookmark: uniqueIndex("unique_user_resource").on(
+      bookmarks.userId,
+      bookmarks.resourceId
+    ),
+  })
+);
 export const selectCategorySchema = createSelectSchema(categories);
 export const selectTagSchema = createSelectSchema(resourceTags);
 export const selectResourceSchema = createSelectSchema(resources)
@@ -185,3 +210,4 @@ export const insertResourceSchema = createInsertSchema(resources, {
   });
 
 export const patchResourceSchema = insertResourceSchema.partial();
+export const selectBookmarkSchema = createSelectSchema(bookmarks);
