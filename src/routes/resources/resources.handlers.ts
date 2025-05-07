@@ -561,7 +561,7 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
     const data = typeof cached === "string" ? cached : JSON.stringify(cached);
     return c.json(JSON.parse(data), HttpStatusCodes.OK);
   }
-
+  const userId = userLogged?.id;
   const creator = alias(user, "creator");
   const [resource] = await db
     .select({
@@ -582,6 +582,16 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
       },
       status: resources.status,
       isPublished: resources.isPublished,
+      // Add isBookmarked flag using a CASE statement
+      // If user is logged in, check if resource is bookmarked by user
+      // If user is not logged in, set isBookmarked to false for all resources
+      isBookmarked: userId
+        ? sql<boolean>`EXISTS (
+        SELECT 1 FROM ${bookmarks} 
+        WHERE ${bookmarks.resourceId} = ${resources.id} 
+        AND ${bookmarks.userId} = ${userId}
+      )`
+        : sql`false`,
     })
     .from(resources)
     .innerJoin(categories, eq(resources.categoryId, categories.id))
@@ -1351,10 +1361,13 @@ export const addOrRemoveBookmark: AppRouteHandler<
 
     if (!wasBookmarked) {
       // Add bookmark
-      await db.insert(bookmarks).values({
-        resourceId,
-        userId: userLoggedIn.id,
-      });
+      await db
+        .insert(bookmarks)
+        .values({
+          resourceId,
+          userId: userLoggedIn.id,
+        })
+        .onConflictDoNothing();
       logger.info(
         `Added bookmark for resource ${resourceId} by user ${userLoggedIn.id}`
       );
@@ -1478,8 +1491,12 @@ export const userBookmarks: AppRouteHandler<UserBookmarksRoute> = async (c) => {
     pipeline.mget(...upvoteKeys);
 
     // Execute all Redis reads in one round trip
-    const [upvoteCountsResult, userUpvotesResult] = await pipeline.exec();
-
+    // const [upvoteCountsResult, userUpvotesResult] = await pipeline.exec();
+    const execResult = await pipeline.exec();
+    const upvoteCountsResult =
+      (execResult[0] as [Error | null, (string | null)[]])[1] ?? [];
+    const userUpvotesResult =
+      (execResult[1] as [Error | null, (string | null)[]])[1] ?? [];
     // Process upvote counts from Redis
     const upvoteCounts = new Map();
     const missingIds = [];

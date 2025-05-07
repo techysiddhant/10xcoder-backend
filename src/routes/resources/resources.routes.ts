@@ -278,6 +278,7 @@ export const addOrRemoveBookmark = createRoute({
         success: z.boolean().default(true),
         resourceId: z.string(),
         message: z.string(),
+        isBookmarked: z.boolean(),
       }),
       "The Bookmark added"
     ),
@@ -286,6 +287,7 @@ export const addOrRemoveBookmark = createRoute({
         success: z.boolean().default(true),
         resourceId: z.string(),
         message: z.string(),
+        isBookmarked: z.boolean(),
       }),
       "The Bookmark removed"
     ),
@@ -307,9 +309,19 @@ export const userBookmarks = createRoute({
   path: "/user/bookmarks",
   method: "get",
   tags,
+  request: {
+    query: z
+      .object({
+        cursor: z.string().optional(),
+      })
+      .partial(),
+  },
   responses: {
     [HttpStatusCodes.OK]: jsonContent(
-      z.array(selectBookmarkSchema),
+      z.object({
+        bookmarks: z.array(selectBookmarkSchema),
+        nextCursor: z.string().nullable(),
+      }),
       "The User Bookmarks"
     ),
     [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
