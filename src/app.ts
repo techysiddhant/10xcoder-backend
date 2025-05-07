@@ -1,18 +1,21 @@
-import configureOpenAPI from "./lib/configure-open-api";
-import createApp from "./lib/create-app";
-import index from "@/routes/index.route";
+import type { Context } from "hono";
+
+import { createRouteHandler } from "uploadthing/server";
+
 import categories from "@/routes/categories/categories.index";
+import index from "@/routes/index.route";
 import resources from "@/routes/resources/resources.index";
 import tags from "@/routes/tags/tags.index";
+
 import { auth } from "./lib/auth";
-import { isAuth } from "./middlewares/is-auth";
-import { createRouteHandler } from "uploadthing/server";
-import { uploadRouter } from "./lib/uploadthing";
+import configureOpenAPI from "./lib/configure-open-api";
+import createApp from "./lib/create-app";
 import env from "./lib/env";
-import { redisIo, redisSubscriber } from "./lib/redis";
-import { Context } from "hono";
 import { qstashReceiver } from "./lib/qstash";
+import { redisIo } from "./lib/redis";
+import { uploadRouter } from "./lib/uploadthing";
 import { syncUpvoteCount } from "./lib/utils";
+import { isAuth } from "./middlewares/is-auth";
 import { upvoteJobBatch } from "./routes/resources/resources.handlers";
 
 const app = createApp();
@@ -47,9 +50,10 @@ app.on("POST", "/api/upvote/sync", async (c: Context) => {
         success: true,
         message: "Webhook received and verified",
       },
-      200
+      200,
     );
-  } catch (error) {
+  }
+  catch (error) {
     logger.error("Upvote sync error:", error);
     return c.json({ error: String(error) }, 500);
   }
@@ -86,9 +90,10 @@ app.on("POST", "/resource/upvote/job/batch", async (c: Context) => {
         success: true,
         message: "Webhook received and verified",
       },
-      200
+      200,
     );
-  } catch (error) {
+  }
+  catch (error) {
     logger.error("Upvote job batch error:", error);
     return c.json({ error: String(error) }, 500);
   }
@@ -102,12 +107,13 @@ const handlers = createRouteHandler({
 });
 
 const routes = [index, resources, categories, tags];
-app.all("/api/uploadthing", (context) => handlers(context.req.raw));
+app.all("/api/uploadthing", context => handlers(context.req.raw));
 app.on(["POST", "GET"], "/api/auth/*", (c) => {
   if (c.req.path === "/api/auth/use-session") {
     const session = c.get("session");
     const user = c.get("user");
-    if (!user) return c.body(null, 401);
+    if (!user)
+      return c.body(null, 401);
 
     return c.json({
       session,
@@ -136,13 +142,14 @@ app.get("/stream", (c: Context) => {
   const stream = new ReadableStream({
     start(controller) {
       controller.enqueue(
-        `data: ${JSON.stringify({ type: "connected", connectionId })}\n\n`
+        `data: ${JSON.stringify({ type: "connected", connectionId })}\n\n`,
       );
 
       const onMessage = (_channel: string, message: string) => {
         try {
           controller.enqueue(`data: ${message}\n\n`);
-        } catch (err) {
+        }
+        catch (err) {
           logger.warn(`Stream ${connectionId} closed. Cannot enqueue message.`);
         }
       };
@@ -151,7 +158,8 @@ app.get("/stream", (c: Context) => {
       const subscribe = async () => {
         try {
           await dedicatedSubscriber.subscribe(upvoteEventKey);
-        } catch (err) {
+        }
+        catch (err) {
           logger.error(`Redis subscription error for ${connectionId}:`, err);
 
           // Try to resubscribe after delay
@@ -170,11 +178,12 @@ app.get("/stream", (c: Context) => {
           controller.enqueue(`: keep-alive ${Date.now()}\n\n`);
           consecutiveErrors = 0;
           keepAliveDelay = 15000; // Reset to normal interval
-        } catch (err) {
+        }
+        catch (err) {
           consecutiveErrors++;
           keepAliveDelay = Math.min(keepAliveDelay * 2, 120000); // Max 2 minutes
           logger.warn(
-            `Keep-alive failed for ${connectionId}. Increasing delay to ${keepAliveDelay}ms.`
+            `Keep-alive failed for ${connectionId}. Increasing delay to ${keepAliveDelay}ms.`,
           );
         }
 
@@ -193,7 +202,8 @@ app.get("/stream", (c: Context) => {
         try {
           await dedicatedSubscriber.unsubscribe(upvoteEventKey);
           await dedicatedSubscriber.quit();
-        } catch (err) {
+        }
+        catch (err) {
           logger.error(`Error cleaning up Redis for ${connectionId}:`, err);
         }
 
@@ -207,7 +217,7 @@ app.get("/stream", (c: Context) => {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      Connection: "keep-alive",
+      "Connection": "keep-alive",
     },
   });
 });

@@ -1,16 +1,20 @@
-import { Resend } from "resend";
-import { UserAuth } from "./types";
 import { createElement } from "react";
-import { VerificationEmail } from "@/emails/verification-email";
+import { Resend } from "resend";
+
 import { ResetEmail } from "@/emails/reset-email";
+import { VerificationEmail } from "@/emails/verification-email";
+
+import type { UserAuth } from "./types";
+
 import env from "./env";
-type EmailData = {
+
+interface EmailData {
   to: string;
   subject: string;
   url: string;
   user: UserAuth;
-};
-export const sendEmail = async (type: string, emailData: EmailData) => {
+}
+export async function sendEmail(type: string, emailData: EmailData) {
   const resend = new Resend(env.RESEND_API_KEY);
   try {
     if (type === "verification") {
@@ -35,7 +39,8 @@ export const sendEmail = async (type: string, emailData: EmailData) => {
         }),
       });
     }
-  } catch (error) {
+  }
+  catch (error) {
     console.error("email sending issue", error);
   }
-};
+}

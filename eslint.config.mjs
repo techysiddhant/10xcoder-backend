@@ -9,7 +9,7 @@ export default antfu({
     semi: true,
     quotes: "double",
   },
-  ignores: ["**/migrations/*"],
+  ignores: ["**/migrations/*", "**/src/db/drizzle/*"],
 }, {
   rules: {
     "no-console": ["warn"],
@@ -23,5 +23,6 @@ export default antfu({
       case: "kebabCase",
       ignore: ["README.md"],
     }],
+    "style/operator-linebreak": ["error", "before"], // Add this line to enforce operators at the beginning of lines
   },
 });

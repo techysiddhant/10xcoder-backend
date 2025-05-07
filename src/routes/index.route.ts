@@ -1,5 +1,6 @@
-import { createRouter } from "@/lib/create-app";
 import { createRoute, z } from "@hono/zod-openapi";
+
+import { createRouter } from "@/lib/create-app";
 
 const router = createRouter().openapi(
   createRoute({
@@ -24,9 +25,9 @@ const router = createRouter().openapi(
       {
         message: "Hello Hono!",
       },
-      200
+      200,
     );
-  }
+  },
 );
 
 export default router;
