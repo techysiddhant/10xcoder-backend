@@ -39,7 +39,7 @@
       "binding": "DB",
       "database_name": "no-name",
       "database_id": "2852ec0a-86c7-46a7-a124-a7d2c6176577",
-      "migrations_dir":"drizzle",
+      "migrations_dir": "drizzle",
       "migrations_table": "__drizzle_migrations"
     }
   ]

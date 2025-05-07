@@ -1,13 +1,15 @@
+import { createRoute, z } from "@hono/zod-openapi";
+import * as HttpStatusCodes from "stoker/http-status-codes";
+import { jsonContent, jsonContentOneOf } from "stoker/openapi/helpers";
+import { createErrorSchema } from "stoker/openapi/schemas";
+
 import {
   insertResourceSchema,
   patchResourceSchema,
   selectBookmarkSchema,
   selectResourceSchema,
 } from "@/db/schema";
-import { createRoute, z } from "@hono/zod-openapi";
-import * as HttpStatusCodes from "stoker/http-status-codes";
-import { jsonContent, jsonContentOneOf } from "stoker/openapi/helpers";
-import { createErrorSchema } from "stoker/openapi/schemas";
+
 const tags = ["Resources"];
 const ResourceParamsSchema = z.object({
   id: z.string().min(3),
@@ -19,15 +21,15 @@ export const getAll = createRoute({
   responses: {
     [HttpStatusCodes.OK]: jsonContent(
       z.array(selectResourceSchema),
-      "The List of Resources"
+      "The List of Resources",
     ),
     [HttpStatusCodes.BAD_REQUEST]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Resources not found"
+      "Resources not found",
     ),
     [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Internal Server Error"
+      "Internal Server Error",
     ),
   },
 });
@@ -45,23 +47,23 @@ export const create = createRoute({
         success: z.boolean().default(true),
         resourceId: z.string(),
       }),
-      "The created Resource"
+      "The created Resource",
     ),
     [HttpStatusCodes.BAD_REQUEST]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Bad Request"
+      "Bad Request",
     ),
     [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Internal Server Error"
+      "Internal Server Error",
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Unauthorized"
+      "Unauthorized",
     ),
     [HttpStatusCodes.UNPROCESSABLE_ENTITY]: jsonContent(
       createErrorSchema(insertResourceSchema),
-      "The validation errors"
+      "The validation errors",
     ),
   },
 });
@@ -75,19 +77,19 @@ export const getOne = createRoute({
   responses: {
     [HttpStatusCodes.OK]: jsonContent(
       selectResourceSchema,
-      "The requested Resource"
+      "The requested Resource",
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Unauthorized"
+      "Unauthorized",
     ),
     [HttpStatusCodes.NOT_FOUND]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Resource not found"
+      "Resource not found",
     ),
     [HttpStatusCodes.UNPROCESSABLE_ENTITY]: jsonContent(
       createErrorSchema(ResourceParamsSchema),
-      "Invalid Id errors"
+      "Invalid Id errors",
     ),
   },
 });
@@ -105,31 +107,31 @@ export const patch = createRoute({
         success: z.boolean().default(true),
         message: z.string(),
       }),
-      "The updated Resource"
+      "The updated Resource",
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Unauthorized"
+      "Unauthorized",
     ),
     [HttpStatusCodes.BAD_REQUEST]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Bad Request"
+      "Bad Request",
     ),
     [HttpStatusCodes.NOT_FOUND]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Resource Not Found"
+      "Resource Not Found",
     ),
     [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Internal Server Error"
+      "Internal Server Error",
     ),
     [HttpStatusCodes.UNPROCESSABLE_ENTITY]: jsonContentOneOf(
       [
         createErrorSchema(patchResourceSchema).or(
-          createErrorSchema(ResourceParamsSchema)
+          createErrorSchema(ResourceParamsSchema),
         ),
       ],
-      "The validation errors"
+      "The validation errors",
     ),
   },
 });
@@ -142,7 +144,7 @@ export const publish = createRoute({
       z.object({
         status: z.enum(["pending", "approved", "rejected"]),
       }),
-      "The Resource to update"
+      "The Resource to update",
     ),
   },
   tags,
@@ -152,15 +154,15 @@ export const publish = createRoute({
         success: z.boolean().default(true),
         message: z.string(),
       }),
-      "The requested Resource"
+      "The requested Resource",
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Unauthorized"
+      "Unauthorized",
     ),
     [HttpStatusCodes.NOT_FOUND]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Resource not found"
+      "Resource not found",
     ),
   },
 });
@@ -184,15 +186,15 @@ export const getUsersResources = createRoute({
         hasNextPage: z.boolean(),
         hasPrevPage: z.boolean(),
       }),
-      "The List of Resources by the user"
+      "The List of Resources by the user",
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Unauthorized"
+      "Unauthorized",
     ),
     [HttpStatusCodes.BAD_REQUEST]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Bad Request"
+      "Bad Request",
     ),
   },
 });
@@ -210,19 +212,19 @@ export const upvote = createRoute({
         success: z.boolean().default(true),
         resourceId: z.string(),
       }),
-      "The upvote was successful"
+      "The upvote was successful",
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Unauthorized"
+      "Unauthorized",
     ),
     [HttpStatusCodes.NOT_FOUND]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Resource not found"
+      "Resource not found",
     ),
     [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Internal Server Error"
+      "Internal Server Error",
     ),
   },
 });
@@ -238,7 +240,7 @@ export const upvoteQueue = createRoute({
         action: z.enum(["add", "remove"]),
         timestamp: z.coerce.date().default(() => new Date()),
       }),
-      "Add Upvote Job to the queue"
+      "Add Upvote Job to the queue",
     ),
   },
   responses: {
@@ -247,19 +249,19 @@ export const upvoteQueue = createRoute({
         success: z.boolean().default(true),
         message: z.string(),
       }),
-      "Job was successful"
+      "Job was successful",
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Unauthorized"
+      "Unauthorized",
     ),
     [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Internal Server Error"
+      "Internal Server Error",
     ),
     [HttpStatusCodes.BAD_REQUEST]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Bad Request"
+      "Bad Request",
     ),
   },
 });
@@ -280,7 +282,7 @@ export const addOrRemoveBookmark = createRoute({
         message: z.string(),
         isBookmarked: z.boolean(),
       }),
-      "The Bookmark added"
+      "The Bookmark added",
     ),
     [HttpStatusCodes.OK]: jsonContent(
       z.object({
@@ -289,19 +291,19 @@ export const addOrRemoveBookmark = createRoute({
         message: z.string(),
         isBookmarked: z.boolean(),
       }),
-      "The Bookmark removed"
+      "The Bookmark removed",
     ),
     [HttpStatusCodes.NOT_FOUND]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Resource not found"
+      "Resource not found",
     ),
     [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Internal Server Error"
+      "Internal Server Error",
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Unauthorized"
+      "Unauthorized",
     ),
   },
 });
@@ -322,15 +324,15 @@ export const userBookmarks = createRoute({
         bookmarks: z.array(selectBookmarkSchema),
         nextCursor: z.string().nullable(),
       }),
-      "The User Bookmarks"
+      "The User Bookmarks",
     ),
     [HttpStatusCodes.INTERNAL_SERVER_ERROR]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Internal Server Error"
+      "Internal Server Error",
     ),
     [HttpStatusCodes.UNAUTHORIZED]: jsonContent(
       z.object({ message: z.string(), success: z.boolean().default(false) }),
-      "Unauthorized"
+      "Unauthorized",
     ),
   },
 });

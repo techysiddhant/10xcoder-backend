@@ -1,14 +1,18 @@
-import { pinoLogger } from "@/middlewares/pino-logger";
-import { notFound, onError } from "stoker/middlewares";
-import { AppBindings } from "./types";
-import { OpenAPIHono } from "@hono/zod-openapi";
-import { defaultHook } from "stoker/openapi";
-import { cors } from "hono/cors";
-import { auth } from "./auth";
-import { rateLimiter } from "hono-rate-limiter";
 import { RedisStore } from "@hono-rate-limiter/redis";
-import { redis } from "./redis";
+import { OpenAPIHono } from "@hono/zod-openapi";
+import { rateLimiter } from "hono-rate-limiter";
+import { cors } from "hono/cors";
+import { notFound, onError } from "stoker/middlewares";
+import { defaultHook } from "stoker/openapi";
+
+import { pinoLogger } from "@/middlewares/pino-logger";
+
+import type { AppBindings } from "./types";
+
+import { auth } from "./auth";
 import env from "./env";
+import { redis } from "./redis";
+
 export function createRouter() {
   return new OpenAPIHono<AppBindings>({ strict: false, defaultHook });
 }
@@ -21,7 +25,7 @@ export default function createApp() {
       windowMs: 15 * 60 * 1000, // 15 minutes
       limit: 100, // Limit each IP to 100 requests per `window` (here, per 15 minutes).
       standardHeaders: "draft-6", // draft-6: `RateLimit-*` headers; draft-7: combined `RateLimit` header
-      keyGenerator: (c) => c.req.header("cf-connecting-ip") ?? "", // Method to generate custom identifiers for clients.
+      keyGenerator: c => c.req.header("cf-connecting-ip") ?? "", // Method to generate custom identifiers for clients.
       store: new RedisStore({ client: redis }),
     });
     return next();
@@ -44,7 +48,7 @@ export default function createApp() {
       exposeHeaders: ["Content-Length"],
       maxAge: 600,
       credentials: true,
-    })
+    }),
   );
   app.use("*", async (c, next) => {
     const session = await auth.api.getSession({ headers: c.req.raw.headers });

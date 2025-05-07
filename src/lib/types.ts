@@ -1,16 +1,16 @@
 import type { OpenAPIHono, RouteConfig, RouteHandler } from "@hono/zod-openapi";
 import type { PinoLogger } from "hono-pino";
 
-export type AppBindings = {
+export interface AppBindings {
   Variables: {
     logger: PinoLogger;
     user: UserAuth | null;
     session: SessionAuth | null;
   };
   Bindings: Env["Bindings"];
-};
+}
 
-export type Env = {
+export interface Env {
   Bindings: {
     LOG_LEVEL: string;
     NODE_ENV: string;
@@ -30,7 +30,7 @@ export type Env = {
     UPSTASH_REDIS_REST_URL: string;
     UPSTASH_REDIS_REST_TOKEN: string;
   };
-};
+}
 export interface UserAuth {
   id: string;
   name: string;

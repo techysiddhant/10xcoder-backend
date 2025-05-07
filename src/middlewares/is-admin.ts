@@ -1,5 +1,6 @@
 import { createMiddleware } from "hono/factory";
 import * as HttpStatusCodes from "stoker/http-status-codes";
+
 export const isAdmin = createMiddleware(async (c, next) => {
   const user = c.get("user");
   if (!user) {
@@ -9,7 +10,7 @@ export const isAdmin = createMiddleware(async (c, next) => {
         success: false,
         error: "AUTH_REQUIRED",
       },
-      HttpStatusCodes.UNAUTHORIZED
+      HttpStatusCodes.UNAUTHORIZED,
     );
   }
   if (user.role !== "admin") {
@@ -19,7 +20,7 @@ export const isAdmin = createMiddleware(async (c, next) => {
         success: false,
         error: "INSUFFICIENT_PERMISSIONS",
       },
-      HttpStatusCodes.UNAUTHORIZED
+      HttpStatusCodes.UNAUTHORIZED,
     );
   }
   await next();

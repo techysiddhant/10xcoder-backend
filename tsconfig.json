@@ -6,20 +6,21 @@
     "lib": [
       "ESNext"
     ],
+    "baseUrl": "./",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
     "types": [
       "@cloudflare/workers-types/2023-07-01",
       "node"
     ],
     "strict": true,
-    "skipLibCheck": true,
     "outDir": "./dist",
-    "paths": {
-      "@/*": ["./src/*"]
-    }, 
-    "baseUrl": "./"
-  },"tsc-alias": {
+    "skipLibCheck": true
+  },
+  "tsc-alias": {
     "resolveFullPaths": true
-    }
+  }
 }

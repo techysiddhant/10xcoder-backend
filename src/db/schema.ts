@@ -1,17 +1,16 @@
-import { z } from "zod";
-import { createInsertSchema, createSelectSchema } from "drizzle-zod";
-
 import {
-  pgTable,
-  text,
-  integer,
-  timestamp,
   boolean,
-  uuid,
-  primaryKey,
   index,
+  integer,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
   uniqueIndex,
+  uuid,
 } from "drizzle-orm/pg-core";
+import { createInsertSchema, createSelectSchema } from "drizzle-zod";
+import { z } from "zod";
 
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
@@ -96,10 +95,10 @@ export const resources = pgTable(
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),
   },
-  (resources) => ({
+  resources => ({
     resourceTypeIdx: index("resource_type_idx").on(resources.resourceType),
     categoryIdIdx: index("category_id_idx").on(resources.categoryId),
-  })
+  }),
 );
 
 // CATEGORY TABLE
@@ -133,11 +132,11 @@ export const resourceToTag = pgTable(
       .notNull()
       .references(() => resourceTags.id, { onDelete: "cascade" }),
   },
-  (t) => ({
+  t => ({
     pk: primaryKey({ columns: [t.resourceId, t.tagId] }),
     resourceIdx: index("resource_tag_resource_idx").on(t.resourceId),
     tagIdx: index("resource_tag_tag_idx").on(t.tagId),
-  })
+  }),
 );
 export const resourceUpvotes = pgTable(
   "resource_upvotes",
@@ -148,11 +147,11 @@ export const resourceUpvotes = pgTable(
       .references(() => resources.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").defaultNow(),
   },
-  (t) => ({
+  t => ({
     pk: primaryKey({ columns: [t.userId, t.resourceId] }),
     userIdx: index("resource_upvote_user_idx").on(t.userId),
     resourceIdx: index("resource_upvote_resource_idx").on(t.resourceId),
-  })
+  }),
 );
 export const bookmarks = pgTable(
   "resource_bookmarks",
@@ -169,15 +168,15 @@ export const bookmarks = pgTable(
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),
   },
-  (bookmarks) => ({
+  bookmarks => ({
     userIdIdx: index("user_id_bookmark_idx").on(bookmarks.userId),
     resourceIdIdx: index("resource_id_bookmark_idx").on(bookmarks.resourceId),
     // Add a unique composite index to prevent duplicate bookmarks
     uniqueBookmark: uniqueIndex("unique_user_resource").on(
       bookmarks.userId,
-      bookmarks.resourceId
+      bookmarks.resourceId,
     ),
-  })
+  }),
 );
 export const selectCategorySchema = createSelectSchema(categories);
 export const selectTagSchema = createSelectSchema(resourceTags);

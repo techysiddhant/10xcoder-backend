@@ -5,7 +5,7 @@ on:
     types: [vercel.deployment.success]
 
 env:
-  VERCEL_PROJECT_NAME: no-name-backend 
+  VERCEL_PROJECT_NAME: no-name-backend
   EXPECTED_BRANCH: main
 
 jobs:
@@ -33,7 +33,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: "18"
 
       - name: Install pnpm
         run: npm install -g pnpm
@@ -45,4 +45,3 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - name: Run Drizzle Migrate
         run: npx drizzle-kit migrate
-        

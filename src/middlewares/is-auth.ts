@@ -1,5 +1,6 @@
 import { createMiddleware } from "hono/factory";
 import * as HttpStatusCodes from "stoker/http-status-codes";
+
 export const isAuth = createMiddleware(async (c, next) => {
   const user = c.get("user");
   if (!user) {
@@ -9,7 +10,7 @@ export const isAuth = createMiddleware(async (c, next) => {
         success: false,
         error: "AUTH_REQUIRED",
       },
-      HttpStatusCodes.UNAUTHORIZED
+      HttpStatusCodes.UNAUTHORIZED,
     );
   }
   await next();

@@ -1,7 +1,15 @@
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
-import { count } from "drizzle-orm/sql";
+import type { Redis } from "@upstash/redis";
+import type { Context } from "hono";
+import type { PinoLogger } from "hono-pino";
 
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+import { count } from "drizzle-orm/sql";
 import * as HttpStatusCodes from "stoker/http-status-codes";
+
+import type { AppRouteHandler, ResourceTag } from "@/lib/types";
+
+import db from "@/db";
 import {
   bookmarks,
   categories,
@@ -11,8 +19,11 @@ import {
   resourceUpvotes,
   user,
 } from "@/db/schema";
+import env from "@/lib/env";
+import { qstashClient, qstashReceiver } from "@/lib/qstash";
+import { CACHE_VERSIONS, redis, redisIo } from "@/lib/redis";
 import { isResourceType } from "@/lib/utils";
-import type { AppRouteHandler, ResourceTag } from "@/lib/types";
+
 import type {
   AddRemoveBookmarkRoute,
   CreateRoute,
@@ -25,20 +36,13 @@ import type {
   UpvoteRoute,
   UserBookmarksRoute,
 } from "./resources.routes";
-import { CACHE_VERSIONS, redis, redisIo } from "@/lib/redis";
-import db from "@/db";
-import { alias } from "drizzle-orm/pg-core";
-import { qstashClient, qstashReceiver } from "@/lib/qstash";
-import env from "@/lib/env";
-import type { PinoLogger } from "hono-pino";
-import { Context } from "hono";
-import { Redis } from "@upstash/redis";
+
 const GETALL_TTL = 60 * 2; // 2 minutes
-export const invalidateUserBookmarksCache = async (
+export async function invalidateUserBookmarksCache(
   userId: string,
   redis: Redis,
   logger: PinoLogger
-): Promise<void> => {
+): Promise<void> {
   try {
     // The cache version should match what's used in the userBookmarks handler
 
@@ -52,7 +56,6 @@ export const invalidateUserBookmarksCache = async (
 
     do {
       // Execute SCAN command with the pattern
-      // @ts-ignore - Upstash Redis may have different typings
       const [nextCursor, keys] = await redis.scan(cursor, {
         match: pattern,
         count: 100, // Scan 100 keys at a time
@@ -60,7 +63,9 @@ export const invalidateUserBookmarksCache = async (
 
       // Convert nextCursor to number
       cursor =
-        typeof nextCursor === "string" ? parseInt(nextCursor, 10) : nextCursor;
+        typeof nextCursor === "string"
+          ? Number.parseInt(nextCursor, 10)
+          : nextCursor;
 
       // Add found keys to our list
       if (keys && Array.isArray(keys) && keys.length > 0) {
@@ -93,7 +98,7 @@ export const invalidateUserBookmarksCache = async (
     );
     // We don't throw here, as cache invalidation failure should not break the main operation
   }
-};
+}
 
 async function processBatch(
   listKey: string,
@@ -198,11 +203,11 @@ const getUpvoteCountKey = (resourceId: string) => `upvote:count:${resourceId}`;
  * @param logger - Logger instance
  * @returns The number of bookmarks for the resource
  */
-export const getResourceBookmarkCount = async (
+export async function getResourceBookmarkCount(
   resourceId: string,
   redis: Redis,
   logger: PinoLogger
-): Promise<number> => {
+): Promise<number> {
   try {
     const key = getResourceBookmarkCountKey(resourceId);
 
@@ -226,7 +231,7 @@ export const getResourceBookmarkCount = async (
     );
     return 0; // Default to 0 on error
   }
-};
+}
 export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const resourceType = c.req.query("resourceType") ?? "";
   const categoryName = c.req.query("category") ?? "";
@@ -388,7 +393,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
       await pipeline.exec();
     }
     // Check if user has upvoted each resource (if logged in)
-    let userUpvotes = new Map();
+    const userUpvotes = new Map();
     if (userLoggedIn?.id) {
       // Batch check user upvotes from Redis
       const upvoteKeys = resourceIds.map(
@@ -422,7 +427,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
     }
 
     // Attach tags
-    let finalData = filteredResources.map((res) => {
+    const finalData = filteredResources.map((res) => {
       const upvoteCount = upvoteCounts.get(res.id) || 0;
       const hasUpvoted = userLoggedIn?.id
         ? userUpvotes.get(res.id) || false
@@ -813,8 +818,8 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
   await db
     .update(resources)
     .set({
-      isPublished: status === "approved" ? true : false,
-      status: status,
+      isPublished: status === "approved",
+      status,
       updatedAt: new Date(),
     })
     .where(eq(resources.id, id));
@@ -845,7 +850,7 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
 
   const page = Number.parseInt(c.req.query("page") || "1", 10);
   const limit = Number.parseInt(c.req.query("limit") || "10", 10);
-  if (isNaN(page) || page < 1) {
+  if (Number.isNaN(page) || page < 1) {
     return c.json(
       { message: "Invalid page number", success: false },
       HttpStatusCodes.BAD_REQUEST
@@ -1147,7 +1152,7 @@ export const upvoteQueue: AppRouteHandler<UpvoteQueueRoute> = async (c) => {
     );
   }
 };
-export const upvoteJobBatch = async (c: Context) => {
+export async function upvoteJobBatch(c: Context) {
   const { logger } = c.var;
   try {
     // Process configuration
@@ -1156,7 +1161,7 @@ export const upvoteJobBatch = async (c: Context) => {
     let failedOperations = 0;
 
     // Process removes first (usually fewer and important for consistency)
-    let removeOps = await processBatch(
+    const removeOps = await processBatch(
       "upvote:batch:remove",
       BATCH_SIZE,
       logger
@@ -1165,7 +1170,7 @@ export const upvoteJobBatch = async (c: Context) => {
     failedOperations += removeOps.failed;
 
     // Then process adds
-    let addOps = await processBatch("upvote:batch:add", BATCH_SIZE, logger);
+    const addOps = await processBatch("upvote:batch:add", BATCH_SIZE, logger);
     processedOperations += addOps.processed;
     failedOperations += addOps.failed;
 
@@ -1210,15 +1215,15 @@ export const upvoteJobBatch = async (c: Context) => {
       HttpStatusCodes.INTERNAL_SERVER_ERROR
     );
   }
-};
+}
 /**
  * Get the Redis key for a resource's bookmark count
  * @param resourceId - The ID of the resource
  * @returns The Redis key for the bookmark count
  */
-export const getResourceBookmarkCountKey = (resourceId: string): string => {
+export function getResourceBookmarkCountKey(resourceId: string): string {
   return `resource:${CACHE_VERSIONS.BOOKMARKS}:${resourceId}:bookmark:count`;
-};
+}
 /**
  * Update bookmark count in Redis for a resource
  * @param resourceId - The ID of the resource
@@ -1226,12 +1231,12 @@ export const getResourceBookmarkCountKey = (resourceId: string): string => {
  * @param redis - Redis client instance
  * @param logger - Logger instance
  */
-export const updateResourceBookmarkCount = async (
+export async function updateResourceBookmarkCount(
   resourceId: string,
   increment: boolean,
   redis: Redis,
   logger: PinoLogger
-): Promise<void> => {
+): Promise<void> {
   try {
     const key = getResourceBookmarkCountKey(resourceId);
 
@@ -1274,18 +1279,18 @@ export const updateResourceBookmarkCount = async (
     );
     // Non-blocking - we don't want to fail the main operation
   }
-};
+}
 /**
  * Initialize the bookmark count for a resource by querying the database
  * @param resourceId - The ID of the resource
  * @param redis - Redis client instance
  * @param logger - Logger instance
  */
-export const initializeResourceBookmarkCount = async (
+export async function initializeResourceBookmarkCount(
   resourceId: string,
   redis: Redis,
   logger: PinoLogger
-): Promise<void> => {
+): Promise<void> {
   try {
     // Get actual count from database
     const result = await db
@@ -1307,7 +1312,7 @@ export const initializeResourceBookmarkCount = async (
       error
     );
   }
-};
+}
 
 export const addOrRemoveBookmark: AppRouteHandler<
   AddRemoveBookmarkRoute
@@ -1460,14 +1465,17 @@ export const userBookmarks: AppRouteHandler<UserBookmarksRoute> = async (c) => {
     const userBookmarksWithResources = await db
       .select({
         bookmark: bookmarks,
-        resource: resources,
+        resource: {
+          ...resources,
+          categoryName: categories.name,
+        },
       })
       .from(bookmarks)
       .innerJoin(resources, eq(bookmarks.resourceId, resources.id))
+      .leftJoin(categories, eq(resources.categoryId, categories.id))
       .where(baseWhere)
       .limit(limit + 1)
       .orderBy(desc(bookmarks.createdAt));
-
     // Early exit if no results to avoid unnecessary processing
     if (userBookmarksWithResources.length === 0) {
       const emptyResponse = { bookmarks: [], nextCursor: null };
@@ -1566,7 +1574,7 @@ export const userBookmarks: AppRouteHandler<UserBookmarksRoute> = async (c) => {
     }
 
     // Process final data
-    let finalData = userBookmarksWithResources.map((res) => {
+    const finalData = userBookmarksWithResources.map((res) => {
       return {
         id: res.bookmark.id,
         userId: res.bookmark.userId,

@@ -1,8 +1,11 @@
-import { AppRouteHandler } from "@/lib/types";
 import * as HttpStatusCodes from "stoker/http-status-codes";
-import { GetAllRoute } from "./tags.routes";
+
+import type { AppRouteHandler } from "@/lib/types";
+
 import db from "@/db";
 import { redis } from "@/lib/redis";
+
+import type { GetAllRoute } from "./tags.routes";
 
 export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   const cached = await redis.get("tags");

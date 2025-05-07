@@ -1,8 +1,11 @@
-import db from "@/db";
-import { redisIo } from "./redis";
-import { resources } from "@/db/schema";
-import { eq } from "drizzle-orm";
 import type { PinoLogger } from "hono-pino";
+
+import { eq } from "drizzle-orm";
+
+import db from "@/db";
+import { resources } from "@/db/schema";
+
+import { redisIo } from "./redis";
 
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png"] as const;
 export function isResourceType(value: string): value is "video" | "article" {
@@ -35,7 +38,7 @@ export async function syncUpvoteCount(logger: PinoLogger) {
 
       if (count && resourceId) {
         logger.info(
-          `Syncing upvote count for resource ${resourceId}: ${count}`
+          `Syncing upvote count for resource ${resourceId}: ${count}`,
         );
         await db
           .update(resources) // Ensure `resources` is a valid PgTable instance
@@ -43,13 +46,14 @@ export async function syncUpvoteCount(logger: PinoLogger) {
           .where(eq(resources.id, resourceId));
         syncedCount++;
       }
-    } catch (syncError) {
+    }
+    catch (syncError) {
       logger.error(`Error syncing key ${key}:`, syncError);
       // Continue with other keys even if one fails
     }
   }
   logger.info(`Successfully synced ${syncedCount} upvote counts`);
   logger.info(
-    `Total upvote keys processed: ${keys.length}, successfully synced: ${syncedCount}`
+    `Total upvote keys processed: ${keys.length}, successfully synced: ${syncedCount}`,
   );
 }

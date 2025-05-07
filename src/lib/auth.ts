@@ -2,9 +2,11 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { admin, openAPI, username } from "better-auth/plugins";
 
-import { sendEmail } from "./resend";
 import db from "@/db";
+
 import env from "./env";
+import { sendEmail } from "./resend";
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "pg",
