@@ -1396,7 +1396,11 @@ export const addOrRemoveBookmark: AppRouteHandler<
       // Decrement bookmark count in Redis
       await updateResourceBookmarkCount(resourceId, false, redis, logger);
     }
-
+    const bookmarkCount = await getResourceBookmarkCount(
+      resourceId,
+      redis,
+      logger
+    );
     // Invalidate user's bookmarks cache
     await invalidateUserBookmarksCache(userLoggedIn.id, redis, logger);
     await deleteResourceKeys(`resources:|user:${userLoggedIn.id}*`);
@@ -1408,6 +1412,7 @@ export const addOrRemoveBookmark: AppRouteHandler<
         resourceId,
         message: wasBookmarked ? "Removed" : "Added",
         isBookmarked: !wasBookmarked,
+        bookmarkCount,
       },
       wasBookmarked ? HttpStatusCodes.OK : HttpStatusCodes.CREATED
     );
