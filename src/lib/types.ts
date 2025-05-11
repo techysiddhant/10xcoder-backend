@@ -1,4 +1,5 @@
 import type { OpenAPIHono, RouteConfig, RouteHandler } from "@hono/zod-openapi";
+import type { Ratelimit } from "@upstash/ratelimit";
 import type { PinoLogger } from "hono-pino";
 
 export interface AppBindings {
@@ -6,6 +7,7 @@ export interface AppBindings {
     logger: PinoLogger;
     user: UserAuth | null;
     session: SessionAuth | null;
+    ratelimit: Ratelimit;
   };
   Bindings: Env["Bindings"];
 }
