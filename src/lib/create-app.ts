@@ -23,7 +23,7 @@ class RedisRateLimiter {
     if (!this.instance) {
       const ratelimit = new Ratelimit({
         redis,
-        limiter: Ratelimit.slidingWindow(10, "10 s"),
+        limiter: Ratelimit.slidingWindow(100, "10 m"),
         ephemeralCache: cache,
       });
       this.instance = ratelimit;
