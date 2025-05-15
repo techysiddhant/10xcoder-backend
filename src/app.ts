@@ -1,6 +1,5 @@
 import type { Context } from "hono";
 
-import { eq } from "drizzle-orm";
 import { createRouteHandler } from "uploadthing/server";
 
 import categories from "@/routes/categories/categories.index";
@@ -8,8 +7,6 @@ import index from "@/routes/index.route";
 import resources from "@/routes/resources/resources.index";
 import tags from "@/routes/tags/tags.index";
 
-import db from "./db";
-import { resources as resourcesTable } from "./db/schema";
 import { auth } from "./lib/auth";
 import configureOpenAPI from "./lib/configure-open-api";
 import createApp from "./lib/create-app";
@@ -17,8 +14,7 @@ import env from "./lib/env";
 import { qstashReceiver } from "./lib/qstash";
 import { redisIo } from "./lib/redis";
 import { uploadRouter } from "./lib/uploadthing";
-import { getEmbedding, syncUpvoteCount } from "./lib/utils";
-import { vectorIndex } from "./lib/vectordb";
+import { syncUpvoteCount } from "./lib/utils";
 import { isAuth } from "./middlewares/is-auth";
 import { upvoteJobBatch } from "./routes/resources/resources.handlers";
 
@@ -229,32 +225,5 @@ app.get("/stream", (c: Context) => {
     },
   });
 });
-app.get("/index-search", async (c) => {
-  const { logger } = c.var;
-  try {
-    const allResources = await db.query.resources.findMany({
-      where: eq(resourcesTable.isPublished, true),
-    });
-    for (const res of allResources) {
-      const embedding = await getEmbedding(res.title);
-      if (!embedding)
-        continue;
-      logger.info("Upserting embedding for resource", res.id);
-      await vectorIndex.upsert([
-        {
-          id: res.id,
-          vector: embedding,
-          metadata: {
-            title: res.title,
-          },
-        },
-      ]);
-      logger.info("Upserted embedding for resource", res.id);
-    }
-    return c.json({ success: true, message: "Embeddings stored successfully" });
-  }
-  catch (error) {
-    console.log("ERROR", error);
-  }
-});
+
 export default app;
