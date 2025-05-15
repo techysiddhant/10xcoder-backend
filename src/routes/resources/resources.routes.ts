@@ -43,6 +43,7 @@ export const search = createRoute({
         success: z.boolean().default(true),
         message: z.string(),
         resources: z.array(selectResourceSchema),
+        nextCursor: z.string().nullable(),
       }),
       "The List of Resources",
     ),

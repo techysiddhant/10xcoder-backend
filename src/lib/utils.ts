@@ -1,7 +1,6 @@
 import type { PinoLogger } from "hono-pino";
 
 import { GoogleGenAI } from "@google/genai";
-import { Index } from "@upstash/vector";
 import { eq } from "drizzle-orm";
 
 import db from "@/db";
@@ -9,6 +8,7 @@ import { resources } from "@/db/schema";
 
 import env from "./env";
 import { redisIo } from "./redis";
+import { vectorIndex } from "./vectordb";
 
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png"] as const;
 export function isResourceType(value: string): value is "video" | "article" {
@@ -79,12 +79,8 @@ export async function getEmbeddingSearchResults(
   topK: number,
   logger: PinoLogger,
 ) {
-  const index = new Index({
-    url: env.UPSTASH_VECTOR_REST_URL,
-    token: env.UPSTASH_VECTOR_REST_TOKEN,
-  });
   try {
-    const result = await index.query({
+    const result = await vectorIndex.query({
       vector: queryEmbedding,
       topK,
       includeMetadata: true,

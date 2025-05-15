@@ -519,7 +519,7 @@ export const search: AppRouteHandler<SearchRoute> = async (c) => {
         HttpStatusCodes.OK,
       );
     }
-    let vector;
+    let vector: number[] | undefined;
     const cachedVector = await redis.get(query);
     if (cachedVector) {
       vector = JSON.parse(JSON.stringify(cachedVector));
