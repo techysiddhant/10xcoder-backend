@@ -46,6 +46,9 @@ const EnvSchema = z
     QSTASH_TOKEN: z.string().min(1),
     QSTASH_CURRENT_SIGNING_KEY: z.string().min(1).startsWith("sig"),
     QSTASH_NEXT_SIGNING_KEY: z.string().min(1).startsWith("sig"),
+    AI_API_KEY: z.string().min(1),
+    UPSTASH_VECTOR_REST_URL: z.string().url(),
+    UPSTASH_VECTOR_REST_TOKEN: z.string().min(1),
   })
   .superRefine((input, ctx) => {
     if (input.NODE_ENV === "production" && !input.DATABASE_URL) {

@@ -22,7 +22,8 @@ import {
 import env from "@/lib/env";
 import { qstashClient, qstashReceiver } from "@/lib/qstash";
 import { CACHE_VERSIONS, redis, redisIo } from "@/lib/redis";
-import { isResourceType } from "@/lib/utils";
+import { getEmbedding, isResourceType } from "@/lib/utils";
+import { vectorIndex } from "@/lib/vectordb";
 
 import type {
   AddRemoveBookmarkRoute,
@@ -31,7 +32,9 @@ import type {
   GetOne,
   GetUsersResources,
   PatchRoute,
+  PublishJobRoute,
   PublishRoute,
+  SearchRoute,
   UpvoteQueueRoute,
   UpvoteRoute,
   UserBookmarksRoute,
@@ -41,7 +44,7 @@ const GETALL_TTL = 60 * 2; // 2 minutes
 export async function invalidateUserBookmarksCache(
   userId: string,
   redis: Redis,
-  logger: PinoLogger
+  logger: PinoLogger,
 ): Promise<void> {
   try {
     // The cache version should match what's used in the userBookmarks handler
@@ -62,8 +65,8 @@ export async function invalidateUserBookmarksCache(
       });
 
       // Convert nextCursor to number
-      cursor =
-        typeof nextCursor === "string"
+      cursor
+        = typeof nextCursor === "string"
           ? Number.parseInt(nextCursor, 10)
           : nextCursor;
 
@@ -86,15 +89,17 @@ export async function invalidateUserBookmarksCache(
         }
       }
       logger.info(
-        `Invalidated ${keysToDelete.length} bookmark cache keys for user ${userId}`
+        `Invalidated ${keysToDelete.length} bookmark cache keys for user ${userId}`,
       );
-    } else {
+    }
+    else {
       logger.debug(`No bookmark cache keys found for user ${userId}`);
     }
-  } catch (error) {
+  }
+  catch (error) {
     logger.error(
       `Error invalidating bookmark cache for user ${userId}:`,
-      error
+      error,
     );
     // We don't throw here, as cache invalidation failure should not break the main operation
   }
@@ -103,7 +108,7 @@ export async function invalidateUserBookmarksCache(
 async function processBatch(
   listKey: string,
   batchSize: number,
-  logger: PinoLogger
+  logger: PinoLogger,
 ): Promise<{ processed: number; failed: number }> {
   let processed = 0;
   let failed = 0;
@@ -114,7 +119,8 @@ async function processBatch(
     const opStr = await redisIo.lpop(listKey);
 
     // Exit the loop if the list is empty
-    if (!opStr) break;
+    if (!opStr)
+      break;
 
     try {
       const op = JSON.parse(opStr);
@@ -128,8 +134,8 @@ async function processBatch(
           .where(
             and(
               eq(resourceUpvotes.userId, userId),
-              eq(resourceUpvotes.resourceId, resourceId)
-            )
+              eq(resourceUpvotes.resourceId, resourceId),
+            ),
           )
           .limit(1);
 
@@ -139,29 +145,32 @@ async function processBatch(
             resourceId,
           });
           logger.info(
-            `Added upvote for user ${userId} on resource ${resourceId}`
-          );
-        } else {
-          logger.info(
-            `Skipped duplicate add for user ${userId} on resource ${resourceId}`
+            `Added upvote for user ${userId} on resource ${resourceId}`,
           );
         }
-      } else if (action === "remove") {
+        else {
+          logger.info(
+            `Skipped duplicate add for user ${userId} on resource ${resourceId}`,
+          );
+        }
+      }
+      else if (action === "remove") {
         await db
           .delete(resourceUpvotes)
           .where(
             and(
               eq(resourceUpvotes.userId, userId),
-              eq(resourceUpvotes.resourceId, resourceId)
-            )
+              eq(resourceUpvotes.resourceId, resourceId),
+            ),
           );
         logger.info(
-          `Removed upvote for user ${userId} on resource ${resourceId}`
+          `Removed upvote for user ${userId} on resource ${resourceId}`,
         );
       }
 
       processed++;
-    } catch (error) {
+    }
+    catch (error) {
       logger.error(`Failed to process operation: ${opStr}`, error);
       failed++;
 
@@ -206,7 +215,7 @@ const getUpvoteCountKey = (resourceId: string) => `upvote:count:${resourceId}`;
 export async function getResourceBookmarkCount(
   resourceId: string,
   redis: Redis,
-  logger: PinoLogger
+  logger: PinoLogger,
 ): Promise<number> {
   try {
     const key = getResourceBookmarkCountKey(resourceId);
@@ -224,10 +233,11 @@ export async function getResourceBookmarkCount(
     // Get the newly set value
     const newCachedCount = await redis.get(key);
     return Number(newCachedCount || 0);
-  } catch (error) {
+  }
+  catch (error) {
     logger.error(
       `Error getting bookmark count for resource ${resourceId}:`,
-      error
+      error,
     );
     return 0; // Default to 0 on error
   }
@@ -244,7 +254,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
   if (Number.isNaN(limit) || limit < 10 || limit > 50) {
     return c.json(
       { message: "Invalid limit", success: false },
-      HttpStatusCodes.BAD_REQUEST
+      HttpStatusCodes.BAD_REQUEST,
     );
   }
   if (cursor != null) {
@@ -253,7 +263,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
       // return a 400 Bad Request or throw a BadRequestError
       return c.json(
         { message: "Invalid cursor ", success: false },
-        HttpStatusCodes.BAD_REQUEST
+        HttpStatusCodes.BAD_REQUEST,
       );
     }
   }
@@ -289,7 +299,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
         : []),
       ...(categoryName ? [eq(categories.name, categoryName)] : []),
       ...(tags.length > 0 ? [inArray(resourceTags.name, tags)] : []),
-      ...(cursor ? [lt(resources.createdAt, new Date(cursor))] : [])
+      ...(cursor ? [lt(resources.createdAt, new Date(cursor))] : []),
     );
     const filteredResources = await db
       .selectDistinctOn([resources.createdAt], {
@@ -321,20 +331,15 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
       .leftJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
       .where(baseWhere)
       .groupBy(resources.id, categories.id)
-      .having(
-        tags.length > 0
-          ? sql`COUNT(DISTINCT ${resourceTags.name}) = ${tags.length}`
-          : undefined
-      )
       .orderBy(desc(resources.createdAt), desc(resources.id))
       .limit(limit + 1); // limit + 1 for nextCursor
 
-    const resourceIds = filteredResources.map((r) => r.id);
+    const resourceIds = filteredResources.map(r => r.id);
 
     // First try to get all upvote counts from Redis in a single batch operation
     const countKeys = resourceIds.map(getUpvoteCountKey);
-    const redisCounts =
-      resourceIds.length > 0 ? await redis.mget(...countKeys) : [];
+    const redisCounts
+      = resourceIds.length > 0 ? await redis.mget(...countKeys) : [];
 
     // Build a map of resource ID to upvote count
     const upvoteCounts = new Map();
@@ -346,7 +351,8 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
       if (redisCount !== null) {
         // Found in Redis
         upvoteCounts.set(resourceId, Number(redisCount));
-      } else {
+      }
+      else {
         // Not found in Redis, will need to fetch from DB
         upvoteCounts.set(resourceId, null);
       }
@@ -354,7 +360,7 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
 
     // For any missing counts, query the database
     const missingIds = resourceIds.filter(
-      (id) => upvoteCounts.get(id) === null
+      id => upvoteCounts.get(id) === null,
     );
 
     if (missingIds.length > 0) {
@@ -362,8 +368,8 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
       SELECT resource_id, COUNT(*) as count
       FROM resource_upvotes
       WHERE resource_id IN (${sql.join(
-        missingIds.map((id) => sql`${id}`),
-        sql`, `
+        missingIds.map(id => sql`${id}`),
+        sql`, `,
       )})
       GROUP BY resource_id
     `);
@@ -397,10 +403,10 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
     if (userLoggedIn?.id) {
       // Batch check user upvotes from Redis
       const upvoteKeys = resourceIds.map(
-        (id) => `upvote:user:${userLoggedIn.id}:resource:${id}`
+        id => `upvote:user:${userLoggedIn.id}:resource:${id}`,
       );
-      const userUpvoteResults =
-        resourceIds.length > 0 ? await redis.mget(...upvoteKeys) : [];
+      const userUpvoteResults
+        = resourceIds.length > 0 ? await redis.mget(...upvoteKeys) : [];
 
       // Build a map of resource ID to upvoted status
       for (let i = 0; i < resourceIds.length; i++) {
@@ -422,7 +428,8 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
 
     const tagMap = new Map<string, string[]>();
     for (const { resourceId, tagName } of tagRows) {
-      if (!tagMap.has(resourceId)) tagMap.set(resourceId, []);
+      if (!tagMap.has(resourceId))
+        tagMap.set(resourceId, []);
       tagMap.get(resourceId)!.push(tagName);
     }
 
@@ -452,19 +459,200 @@ export const getAll: AppRouteHandler<GetAllRoute> = async (c) => {
       nextCursor,
     };
 
-    // Cache this page for 5 minutes
+    // Cache this page for 2 minutes
     await redis.set(cacheKey, JSON.stringify(response), { ex: GETALL_TTL });
 
     return c.json(response, HttpStatusCodes.OK);
-  } catch (error) {
+  }
+  catch (error) {
+    console.log("ERROR", error);
     logger.error("Error in GetALL handler:", error);
     return c.json(
       { success: false, message: "Internal server error" },
-      HttpStatusCodes.INTERNAL_SERVER_ERROR
+      HttpStatusCodes.INTERNAL_SERVER_ERROR,
     );
   }
 };
+export const search: AppRouteHandler<SearchRoute> = async (c) => {
+  const { logger } = c.var;
+  try {
+    const cursor = c.req.query("cursor") ?? undefined;
+    const query = c.req.query("query");
+    const userLoggedIn = c.get("user");
+    const limit = 10;
+    if (!query || query.trim().length < 3) {
+      return c.json(
+        { message: "Query is required", success: false },
+        HttpStatusCodes.BAD_REQUEST,
+      );
+    }
+    if (cursor != null) {
+      const timestamp = Date.parse(cursor);
+      if (Number.isNaN(timestamp)) {
+        return c.json(
+          { message: "Invalid cursor ", success: false },
+          HttpStatusCodes.BAD_REQUEST,
+        );
+      }
+    }
+    const cacheKey = [
+      "search:",
+      `${CACHE_VERSIONS.SEARCH}:`,
+      `user:${userLoggedIn?.id || "guest"}`,
+      `cursor:${cursor ?? "null"}`,
+      `limit:${limit}`,
+      `query:${query}`,
+    ].join("");
+    const cachedData = await redis.get(cacheKey);
+    if (cachedData) {
+      const data
+        = typeof cachedData === "string"
+          ? cachedData
+          : JSON.stringify(cachedData);
+      const parsedData = JSON.parse(data);
+      return c.json(
+        {
+          ...parsedData,
+          success: true,
+          message: "Search successful",
+        },
+        HttpStatusCodes.OK,
+      );
+    }
+    let vector: number[] | undefined;
+    const cachedVector = await redis.get(query);
+    if (cachedVector) {
+      vector = JSON.parse(JSON.stringify(cachedVector));
+    }
+    else {
+      vector = await getEmbedding(query);
+      await redis.set(query, JSON.stringify(vector), {
+        ex: 60 * 60 * 24 * 7, // 7 days
+      });
+    }
+    let matchedIds: string[] = [];
+    if (!vector) {
+      return c.json(
+        { success: false, message: "Failed to find resources" },
+        HttpStatusCodes.INTERNAL_SERVER_ERROR,
+      );
+    }
+    const results = await vectorIndex.query({
+      topK: limit,
+      vector,
+      includeMetadata: true,
+    });
+    if (results) {
+      const vectorProduct = results.filter(p => p.score > 0.8);
+      if (vectorProduct.length <= 0) {
+        const response = {
+          resources: [],
+          nextCursor: null,
+        };
+        await redis.set(cacheKey, JSON.stringify({ ...response }), {
+          ex: 60 * 2,
+        });
 
+        return c.json(
+          {
+            success: true,
+            message: "No resources found",
+            ...response,
+          },
+          HttpStatusCodes.OK,
+        );
+      }
+      matchedIds = vectorProduct.map(p => p.id.toString());
+      // Build where clause
+      const baseWhere = and(
+        eq(resources.isPublished, true),
+        ...(cursor ? [lt(resources.createdAt, new Date(cursor))] : []),
+        ...(matchedIds.length > 0 ? [inArray(resources.id, matchedIds)] : []),
+      );
+      const filteredResources = await db
+        .selectDistinctOn([resources.createdAt], {
+          id: resources.id,
+          title: resources.title,
+          description: resources.description,
+          url: resources.url,
+          image: resources.image,
+          resourceType: resources.resourceType,
+          categoryId: resources.categoryId,
+          createdAt: resources.createdAt,
+          updatedAt: resources.updatedAt,
+          categoryName: categories.name,
+          language: resources.language,
+          tags: sql<string[]>`array_agg(${resourceTags.name})`,
+        })
+        .from(resources)
+        .innerJoin(categories, eq(resources.categoryId, categories.id))
+        .leftJoin(resourceToTag, eq(resourceToTag.resourceId, resources.id))
+        .leftJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
+        .groupBy(resources.id, categories.id)
+        .where(baseWhere)
+        // .where(
+        //   and(
+        //     baseWhere,
+        //     ...(query?.trim()
+        //       ? [
+        //           or(
+        //             // fuzzy fallback only
+        //             ilike(resources.title, `%${query.trim()}%`),
+        //             ilike(resourceTags.name, `%${query.trim()}%`)
+        //           ),
+        //         ]
+        //       : [])
+        //   )
+        // )
+        // .having(
+        //   query?.trim()
+        //     ? sql`
+        //         to_tsvector('english', lower(${resources.title} || ' ' || coalesce(string_agg(${resourceTags.name}, ' '), ''))) @@
+        //         websearch_to_tsquery('english', ${query.trim()})
+        //       `
+        //     : sql`true`
+        // )
+        .limit(limit + 1);
+      // Handle nextCursor
+      let nextCursor: string | null = null;
+      if (filteredResources.length > limit) {
+        const nextItem = filteredResources.pop(); // remove extra
+        nextCursor = nextItem?.createdAt.toISOString() ?? null;
+      }
+
+      const response = {
+        resources: filteredResources,
+        nextCursor,
+      };
+      await redis.set(cacheKey, JSON.stringify({ ...response }), {
+        ex: 60 * 2,
+      });
+      return c.json(
+        {
+          success: true,
+          message: "Search successful",
+          ...response,
+        },
+        HttpStatusCodes.OK,
+      );
+    }
+    else {
+      return c.json(
+        { success: false, message: "Failed to find resources" },
+        HttpStatusCodes.INTERNAL_SERVER_ERROR,
+      );
+    }
+    // adjust based on your project structure
+  }
+  catch (error) {
+    console.log("ERROR", error);
+    logger.error("Error in search handler:", error);
+    return c.json(
+      { success: false, message: "Internal server error" },
+      HttpStatusCodes.INTERNAL_SERVER_ERROR,
+    );
+  }
+};
 export const create: AppRouteHandler<CreateRoute> = async (c) => {
   const {
     tags: tagsArray,
@@ -481,9 +669,9 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
     new Set(
       (tagsArray ?? "")
         .split(",")
-        .map((tag) => tag.trim().toLowerCase())
-        .filter(Boolean)
-    )
+        .map(tag => tag.trim().toLowerCase())
+        .filter(Boolean),
+    ),
   );
 
   const userLoggedIn = c.get("user");
@@ -491,13 +679,13 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
   if (!userLoggedIn || !userLoggedIn.id) {
     return c.json(
       { message: "User not authenticated", success: false },
-      HttpStatusCodes.UNAUTHORIZED
+      HttpStatusCodes.UNAUTHORIZED,
     );
   }
   if (!isResourceType(resourceType)) {
     return c.json(
       { message: "Invalid resource type", success: false },
-      HttpStatusCodes.BAD_REQUEST
+      HttpStatusCodes.BAD_REQUEST,
     );
   }
   const [createdResource] = await db
@@ -516,32 +704,41 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
       status: userLoggedIn.role === "admin" ? "approved" : "pending",
     })
     .returning();
+  if (userLoggedIn.role === "admin") {
+    await qstashClient.publishJSON({
+      url: `${env.APP_URL}/resource/publish/job`,
+      body: {
+        resourceId: createdResource.id,
+        timestamp: Date.now(),
+      },
+    });
+  }
   const existingTags = await db
     .select()
     .from(resourceTags)
     .where(inArray(resourceTags.name, tagNames));
 
-  const existingTagMap = new Map(existingTags.map((tag) => [tag.name, tag.id]));
+  const existingTagMap = new Map(existingTags.map(tag => [tag.name, tag.id]));
 
-  const newTagNames = tagNames.filter((name) => !existingTagMap.has(name));
+  const newTagNames = tagNames.filter(name => !existingTagMap.has(name));
   let newTags: ResourceTag[] = [];
   if (newTagNames.length > 0) {
     newTags = await db
       .insert(resourceTags)
-      .values(newTagNames.map((name) => ({ name })))
+      .values(newTagNames.map(name => ({ name })))
       .returning();
   }
   const allTagIds = [
-    ...existingTags.map((tag) => tag.id),
-    ...newTags.map((tag) => tag.id),
+    ...existingTags.map(tag => tag.id),
+    ...newTags.map(tag => tag.id),
   ];
   // 5. Create resource-to-tag relationships
   if (allTagIds.length > 0) {
     await db.insert(resourceToTag).values(
-      allTagIds.map((tagId) => ({
+      allTagIds.map(tagId => ({
         resourceId: createdResource.id,
         tagId,
-      }))
+      })),
     );
   }
   await deleteResourceKeys(`user-resources:${userLoggedIn.id}:*`);
@@ -551,7 +748,7 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
   }
   return c.json(
     { success: true, resourceId: createdResource.id },
-    HttpStatusCodes.CREATED
+    HttpStatusCodes.CREATED,
   );
 };
 
@@ -604,14 +801,14 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
     .where(
       and(
         eq(resources.id, id),
-        userLogged?.id ? undefined : eq(resources.isPublished, true)
-      )
+        userLogged?.id ? undefined : eq(resources.isPublished, true),
+      ),
     );
 
   if (!resource) {
     return c.json(
       { success: false, message: "Resource not found" },
-      HttpStatusCodes.NOT_FOUND
+      HttpStatusCodes.NOT_FOUND,
     );
   }
 
@@ -624,7 +821,7 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
     .innerJoin(resourceTags, eq(resourceToTag.tagId, resourceTags.id))
     .where(eq(resourceToTag.resourceId, id));
 
-  const tags = tagRows.map((row) => row.tagName);
+  const tags = tagRows.map(row => row.tagName);
   // Cache this count in Redis with 7 days TTL (matching getAll handler)
   const UPVOTE_COUNT_TTL = 60 * 60 * 24 * 7;
   // Get upvote count from Redis first
@@ -642,7 +839,8 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
     upvoteCount = Number(dbCount?.count || 0);
 
     await redis.set(upvoteCountKey, upvoteCount, { ex: UPVOTE_COUNT_TTL });
-  } else {
+  }
+  else {
     upvoteCount = Number(upvoteCount);
   }
 
@@ -655,7 +853,8 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
 
     if (cachedUpvoteStatus !== null) {
       hasUpvoted = Boolean(cachedUpvoteStatus);
-    } else {
+    }
+    else {
       // Fall back to database check
       const vote = await db
         .select({ id: resourceUpvotes.userId })
@@ -663,8 +862,8 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
         .where(
           and(
             eq(resourceUpvotes.resourceId, id),
-            eq(resourceUpvotes.userId, userLogged.id)
-          )
+            eq(resourceUpvotes.userId, userLogged.id),
+          ),
         )
         .limit(1);
 
@@ -680,7 +879,7 @@ export const getOne: AppRouteHandler<GetOne> = async (c) => {
   const updatedCount = await getResourceBookmarkCount(
     resource.id,
     redis,
-    logger
+    logger,
   );
 
   const finalData = {
@@ -701,7 +900,7 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
   if (!userLogged?.id) {
     return c.json(
       { success: false, message: "Unauthorized" },
-      HttpStatusCodes.UNAUTHORIZED
+      HttpStatusCodes.UNAUTHORIZED,
     );
   }
   const {
@@ -726,7 +925,7 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
   if (!existing) {
     return c.json(
       { success: false, message: "Resource not found or not yours" },
-      HttpStatusCodes.NOT_FOUND
+      HttpStatusCodes.NOT_FOUND,
     );
   }
   await db
@@ -748,17 +947,17 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
     .from(resourceTags)
     .where(inArray(resourceTags.name, tagNames));
 
-  const existingTagNames = existingTags.map((tag) => tag.name);
+  const existingTagNames = existingTags.map(tag => tag.name);
   const newTagsToCreate = tagNames.filter(
-    (name) => !existingTagNames.includes(name)
+    name => !existingTagNames.includes(name),
   );
 
   // b. Insert new tags if any
   if (newTagsToCreate.length > 0) {
     await db.insert(resourceTags).values(
-      newTagsToCreate.map((name) => ({
+      newTagsToCreate.map(name => ({
         name,
-      }))
+      })),
     );
   }
 
@@ -774,10 +973,10 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
   // e. Add new tag mappings
   if (finalTags.length > 0) {
     await db.insert(resourceToTag).values(
-      finalTags.map((tag) => ({
+      finalTags.map(tag => ({
         resourceId: id,
         tagId: tag.id,
-      }))
+      })),
     );
   }
 
@@ -790,7 +989,7 @@ export const patch: AppRouteHandler<PatchRoute> = async (c) => {
 
   return c.json(
     { success: true, message: "Resource updated successfully" },
-    HttpStatusCodes.OK
+    HttpStatusCodes.OK,
   );
 };
 
@@ -801,7 +1000,7 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
   if (!userLoggedIn || !userLoggedIn.id || userLoggedIn.role !== "admin") {
     return c.json(
       { message: "User not authenticated", success: false },
-      HttpStatusCodes.UNAUTHORIZED
+      HttpStatusCodes.UNAUTHORIZED,
     );
   }
   const [existing] = await db
@@ -812,7 +1011,7 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
   if (!existing) {
     return c.json(
       { success: false, message: "Resource not found" },
-      HttpStatusCodes.NOT_FOUND
+      HttpStatusCodes.NOT_FOUND,
     );
   }
   await db
@@ -823,7 +1022,15 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
       updatedAt: new Date(),
     })
     .where(eq(resources.id, id));
-
+  if (status === "approved") {
+    await qstashClient.publishJSON({
+      url: `${env.APP_URL}/resource/publish/job`,
+      body: {
+        resourceId: id,
+        timestamp: Date.now(),
+      },
+    });
+  }
   // 4. Invalidate cache
   await redis.del(`resource:${id}`);
   await deleteResourceKeys("resources:*");
@@ -836,15 +1043,95 @@ export const publish: AppRouteHandler<PublishRoute> = async (c) => {
     }`,
   });
 };
+export const publishJob: AppRouteHandler<PublishJobRoute> = async (c) => {
+  try {
+    const { resourceId } = c.req.valid("json");
+    const { logger } = c.var;
+    // Verify request signature from QStash
+    const signature = c.req.header("upstash-signature");
+    if (!signature) {
+      return c.json(
+        { success: false, message: "Invalid signature" },
+        HttpStatusCodes.UNAUTHORIZED,
+      );
+    }
+
+    const body = await c.req.json();
+    const isValid = await qstashReceiver.verify({
+      signature,
+      body: JSON.stringify(body),
+      url: `${env.APP_URL}/resource/publish/job`,
+    });
+    logger.info("Publish job received", {
+      resourceId,
+      isValid,
+    });
+    if (!isValid) {
+      return c.json(
+        { success: false, message: "Invalid signature" },
+        HttpStatusCodes.UNAUTHORIZED,
+      );
+    }
+
+    if (!resourceId) {
+      return c.json(
+        { success: false, message: "Invalid request" },
+        HttpStatusCodes.BAD_REQUEST,
+      );
+    }
+
+    const [resource] = await db
+      .select()
+      .from(resources)
+      .where(eq(resources.id, resourceId));
+
+    if (!resource) {
+      return c.json(
+        { success: false, message: "Resource not found" },
+        HttpStatusCodes.NOT_FOUND,
+      );
+    }
+    const embedding = await getEmbedding(resource.title);
+    if (!embedding) {
+      logger.error("Failed to embed resource", {
+        resourceId,
+        title: resource.title,
+      });
+      return c.json(
+        { success: false, message: "Failed to embed resource" },
+        HttpStatusCodes.INTERNAL_SERVER_ERROR,
+      );
+    }
+    await vectorIndex.upsert({
+      id: resourceId,
+      vector: embedding,
+      metadata: {
+        title: resource.title,
+      },
+    });
+    logger.info("Embeddings stored successfully", {
+      resourceId,
+      title: resource.title,
+    });
+    return c.json({ success: true, message: "Embeddings stored successfully" });
+  }
+  catch (error) {
+    console.error("Error in publish job handler:", error);
+    return c.json(
+      { success: false, message: "Internal server error" },
+      HttpStatusCodes.INTERNAL_SERVER_ERROR,
+    );
+  }
+};
 export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
-  c
+  c,
 ) => {
   const userLoggedIn = c.get("user");
 
   if (!userLoggedIn?.id) {
     return c.json(
       { message: "User not authenticated", success: false },
-      HttpStatusCodes.UNAUTHORIZED
+      HttpStatusCodes.UNAUTHORIZED,
     );
   }
 
@@ -853,13 +1140,13 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
   if (Number.isNaN(page) || page < 1) {
     return c.json(
       { message: "Invalid page number", success: false },
-      HttpStatusCodes.BAD_REQUEST
+      HttpStatusCodes.BAD_REQUEST,
     );
   }
   if (Number.isNaN(limit) || limit < 10) {
     return c.json(
       { message: "Invalid limit number", success: false },
-      HttpStatusCodes.BAD_REQUEST
+      HttpStatusCodes.BAD_REQUEST,
     );
   }
   const offset = (page - 1) * limit;
@@ -870,7 +1157,8 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
   const cached = await redis.get(cacheKey);
   if (cached) {
     const data = typeof cached === "string" ? cached : JSON.stringify(cached);
-    if (data) return c.json(JSON.parse(data), HttpStatusCodes.OK);
+    if (data)
+      return c.json(JSON.parse(data), HttpStatusCodes.OK);
   }
 
   const baseWhere = eq(resources.userId, userLoggedIn.id);
@@ -905,7 +1193,7 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
     .where(baseWhere);
   const totalCount = totalCountResult[0]?.count || 0;
 
-  const resourceIds = rows.map((r) => r.id);
+  const resourceIds = rows.map(r => r.id);
   const tagMappings = await db
     .select({
       resourceId: resourceToTag.resourceId,
@@ -917,11 +1205,13 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
 
   const tagMap: Record<string, string[]> = {};
   for (const { resourceId, tagName } of tagMappings) {
-    if (!tagMap[resourceId]) tagMap[resourceId] = [];
-    if (tagName !== null) tagMap[resourceId].push(tagName);
+    if (!tagMap[resourceId])
+      tagMap[resourceId] = [];
+    if (tagName !== null)
+      tagMap[resourceId].push(tagName);
   }
 
-  const resourcesWithTags = rows.map((res) => ({
+  const resourcesWithTags = rows.map(res => ({
     ...res,
     tags: tagMap[res.id] || [],
   }));
@@ -939,7 +1229,7 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
       hasNextPage,
       hasPrevPage,
     }),
-    { ex: 300 }
+    { ex: 300 },
   );
 
   return c.json(
@@ -951,7 +1241,7 @@ export const getUsersResources: AppRouteHandler<GetUsersResources> = async (
       hasNextPage,
       hasPrevPage,
     },
-    HttpStatusCodes.OK
+    HttpStatusCodes.OK,
   );
 };
 
@@ -961,7 +1251,7 @@ export const upvote: AppRouteHandler<UpvoteRoute> = async (c) => {
   if (!userLoggedIn?.id) {
     return c.json(
       { message: "User not authenticated", success: false },
-      HttpStatusCodes.UNAUTHORIZED
+      HttpStatusCodes.UNAUTHORIZED,
     );
   }
 
@@ -981,7 +1271,7 @@ export const upvote: AppRouteHandler<UpvoteRoute> = async (c) => {
       if (!existing) {
         return c.json(
           { success: false, message: "Resource not found" },
-          HttpStatusCodes.NOT_FOUND
+          HttpStatusCodes.NOT_FOUND,
         );
       }
 
@@ -1012,7 +1302,8 @@ export const upvote: AppRouteHandler<UpvoteRoute> = async (c) => {
           timestamp: Date.now(),
         },
       });
-    } else {
+    }
+    else {
       // Add upvote to Redis
       await redisIo.set(upvoteKey, 1, "EX", 60 * 60 * 24 * 7); // 7d TTL
 
@@ -1025,7 +1316,8 @@ export const upvote: AppRouteHandler<UpvoteRoute> = async (c) => {
           .where(eq(resourceUpvotes.resourceId, id));
         newCount = Number(count[0]?.count || 0) + 1;
         await redisIo.set(countKey, newCount, "EX", 60 * 60 * 24 * 7); // 7d TTL
-      } else {
+      }
+      else {
         newCount = await redisIo.incr(countKey);
       }
 
@@ -1053,7 +1345,7 @@ export const upvote: AppRouteHandler<UpvoteRoute> = async (c) => {
         count: newCount,
         action: alreadyUpvoted ? "removed" : "added",
         timestamp: Date.now(),
-      })
+      }),
     );
 
     return c.json(
@@ -1063,13 +1355,14 @@ export const upvote: AppRouteHandler<UpvoteRoute> = async (c) => {
         count: newCount,
         action: alreadyUpvoted ? "removed" : "added",
       },
-      HttpStatusCodes.OK
+      HttpStatusCodes.OK,
     );
-  } catch (error) {
+  }
+  catch (error) {
     console.error("Error in upvote handler:", error);
     return c.json(
       { success: false, message: "Internal server error" },
-      HttpStatusCodes.INTERNAL_SERVER_ERROR
+      HttpStatusCodes.INTERNAL_SERVER_ERROR,
     );
   }
 };
@@ -1083,7 +1376,7 @@ export const upvoteQueue: AppRouteHandler<UpvoteQueueRoute> = async (c) => {
     if (!signature) {
       return c.json(
         { success: false, message: "Invalid signature" },
-        HttpStatusCodes.UNAUTHORIZED
+        HttpStatusCodes.UNAUTHORIZED,
       );
     }
 
@@ -1097,14 +1390,14 @@ export const upvoteQueue: AppRouteHandler<UpvoteQueueRoute> = async (c) => {
     if (!isValid) {
       return c.json(
         { success: false, message: "Invalid signature" },
-        HttpStatusCodes.UNAUTHORIZED
+        HttpStatusCodes.UNAUTHORIZED,
       );
     }
 
     if (!userId || !resourceId || !action) {
       return c.json(
         { success: false, message: "Invalid request" },
-        HttpStatusCodes.BAD_REQUEST
+        HttpStatusCodes.BAD_REQUEST,
       );
     }
 
@@ -1117,12 +1410,12 @@ export const upvoteQueue: AppRouteHandler<UpvoteQueueRoute> = async (c) => {
     });
 
     // Use different lists for adds and removes to allow prioritization if needed
-    const listKey =
-      action === "add" ? "upvote:batch:add" : "upvote:batch:remove";
+    const listKey
+      = action === "add" ? "upvote:batch:add" : "upvote:batch:remove";
     await redisIo.rpush(listKey, operation);
 
     logger.info(
-      `Queued ${action} operation for user ${userId} on resource ${resourceId}`
+      `Queued ${action} operation for user ${userId} on resource ${resourceId}`,
     );
 
     // Check if we need to schedule a batch job
@@ -1142,13 +1435,14 @@ export const upvoteQueue: AppRouteHandler<UpvoteQueueRoute> = async (c) => {
 
     return c.json(
       { success: true, message: "Operation queued for batch processing" },
-      HttpStatusCodes.OK
+      HttpStatusCodes.OK,
     );
-  } catch (error) {
+  }
+  catch (error) {
     console.error("Error in upvote queue handler:", error);
     return c.json(
       { success: false, message: "Internal server error" },
-      HttpStatusCodes.INTERNAL_SERVER_ERROR
+      HttpStatusCodes.INTERNAL_SERVER_ERROR,
     );
   }
 };
@@ -1164,7 +1458,7 @@ export async function upvoteJobBatch(c: Context) {
     const removeOps = await processBatch(
       "upvote:batch:remove",
       BATCH_SIZE,
-      logger
+      logger,
     );
     processedOperations += removeOps.processed;
     failedOperations += removeOps.failed;
@@ -1192,7 +1486,7 @@ export async function upvoteJobBatch(c: Context) {
       logger.info(
         `Scheduled follow-up batch job. Remaining operations: ${
           remainingAdds + remainingRemoves
-        }`
+        }`,
       );
     }
 
@@ -1206,13 +1500,14 @@ export async function upvoteJobBatch(c: Context) {
           remaining: remainingAdds + remainingRemoves,
         },
       },
-      HttpStatusCodes.OK
+      HttpStatusCodes.OK,
     );
-  } catch (error) {
+  }
+  catch (error) {
     logger.error("Error in batch upvote job handler:", error);
     return c.json(
       { success: false, message: "Internal server error" },
-      HttpStatusCodes.INTERNAL_SERVER_ERROR
+      HttpStatusCodes.INTERNAL_SERVER_ERROR,
     );
   }
 }
@@ -1235,7 +1530,7 @@ export async function updateResourceBookmarkCount(
   resourceId: string,
   increment: boolean,
   redis: Redis,
-  logger: PinoLogger
+  logger: PinoLogger,
 ): Promise<void> {
   try {
     const key = getResourceBookmarkCountKey(resourceId);
@@ -1247,7 +1542,8 @@ export async function updateResourceBookmarkCount(
       // Increment or decrement the existing count
       if (increment) {
         await redis.incr(key);
-      } else {
+      }
+      else {
         // Ensure we don't go below zero
         await redis.eval(
           // Lua script to decrement only if value is > 0
@@ -1259,23 +1555,26 @@ export async function updateResourceBookmarkCount(
              return 0
            end`,
           [key], // Array of keys
-          [] // Array of args (empty in this case)
+          [], // Array of args (empty in this case)
         );
       }
-    } else if (increment) {
+    }
+    else if (increment) {
       // Key doesn't exist, get accurate count from database
       await initializeResourceBookmarkCount(resourceId, redis, logger);
-    } else {
+    }
+    else {
       // We're trying to decrement a non-existent key, just set to 0
       await redis.set(key, 0);
     }
 
     // Set expiration to prevent stale counts
     await redis.expire(key, 60 * 60 * 24 * 30); // 30 days TTL
-  } catch (error) {
+  }
+  catch (error) {
     logger.error(
       `Error updating bookmark count for resource ${resourceId}:`,
-      error
+      error,
     );
     // Non-blocking - we don't want to fail the main operation
   }
@@ -1289,7 +1588,7 @@ export async function updateResourceBookmarkCount(
 export async function initializeResourceBookmarkCount(
   resourceId: string,
   redis: Redis,
-  logger: PinoLogger
+  logger: PinoLogger,
 ): Promise<void> {
   try {
     // Get actual count from database
@@ -1304,12 +1603,13 @@ export async function initializeResourceBookmarkCount(
     // Store count in Redis with TTL
     await redis.set(key, count, { ex: 60 * 60 * 24 * 30 }); // 30 days TTL
     logger.debug(
-      `Initialized bookmark count for resource ${resourceId}: ${count}`
+      `Initialized bookmark count for resource ${resourceId}: ${count}`,
     );
-  } catch (error) {
+  }
+  catch (error) {
     logger.error(
       `Error initializing bookmark count for resource ${resourceId}:`,
-      error
+      error,
     );
   }
 }
@@ -1330,7 +1630,7 @@ export const addOrRemoveBookmark: AppRouteHandler<
         message: "Unauthorized: Authentication required",
         success: false,
       },
-      HttpStatusCodes.UNAUTHORIZED
+      HttpStatusCodes.UNAUTHORIZED,
     );
   }
 
@@ -1339,7 +1639,7 @@ export const addOrRemoveBookmark: AppRouteHandler<
       .select()
       .from(resources)
       .where(
-        and(eq(resources.id, resourceId), eq(resources.isPublished, true))
+        and(eq(resources.id, resourceId), eq(resources.isPublished, true)),
       );
 
     if (!existing) {
@@ -1348,7 +1648,7 @@ export const addOrRemoveBookmark: AppRouteHandler<
           message: "Resource not found",
           success: false,
         },
-        HttpStatusCodes.NOT_FOUND
+        HttpStatusCodes.NOT_FOUND,
       );
     }
 
@@ -1358,8 +1658,8 @@ export const addOrRemoveBookmark: AppRouteHandler<
       .where(
         and(
           eq(bookmarks.resourceId, resourceId),
-          eq(bookmarks.userId, userLoggedIn.id)
-        )
+          eq(bookmarks.userId, userLoggedIn.id),
+        ),
       );
 
     const wasBookmarked = isBookmarked.length > 0;
@@ -1374,23 +1674,24 @@ export const addOrRemoveBookmark: AppRouteHandler<
         })
         .onConflictDoNothing();
       logger.info(
-        `Added bookmark for resource ${resourceId} by user ${userLoggedIn.id}`
+        `Added bookmark for resource ${resourceId} by user ${userLoggedIn.id}`,
       );
 
       // Increment bookmark count in Redis
       await updateResourceBookmarkCount(resourceId, true, redis, logger);
-    } else {
+    }
+    else {
       // Remove bookmark
       await db
         .delete(bookmarks)
         .where(
           and(
             eq(bookmarks.resourceId, resourceId),
-            eq(bookmarks.userId, userLoggedIn.id)
-          )
+            eq(bookmarks.userId, userLoggedIn.id),
+          ),
         );
       logger.info(
-        `Removed bookmark for resource ${resourceId} by user ${userLoggedIn.id}`
+        `Removed bookmark for resource ${resourceId} by user ${userLoggedIn.id}`,
       );
 
       // Decrement bookmark count in Redis
@@ -1399,7 +1700,7 @@ export const addOrRemoveBookmark: AppRouteHandler<
     const bookmarkCount = await getResourceBookmarkCount(
       resourceId,
       redis,
-      logger
+      logger,
     );
     // Invalidate user's bookmarks cache
     await invalidateUserBookmarksCache(userLoggedIn.id, redis, logger);
@@ -1414,13 +1715,14 @@ export const addOrRemoveBookmark: AppRouteHandler<
         isBookmarked: !wasBookmarked,
         bookmarkCount,
       },
-      wasBookmarked ? HttpStatusCodes.OK : HttpStatusCodes.CREATED
+      wasBookmarked ? HttpStatusCodes.OK : HttpStatusCodes.CREATED,
     );
-  } catch (error) {
+  }
+  catch (error) {
     logger.error("Error in add or remove bookmark handler:", error);
     return c.json(
       { success: false, message: "Internal server error" },
-      HttpStatusCodes.INTERNAL_SERVER_ERROR
+      HttpStatusCodes.INTERNAL_SERVER_ERROR,
     );
   }
 };
@@ -1436,7 +1738,7 @@ export const userBookmarks: AppRouteHandler<UserBookmarksRoute> = async (c) => {
         message: "Unauthorized: Authentication required",
         success: false,
       },
-      HttpStatusCodes.UNAUTHORIZED
+      HttpStatusCodes.UNAUTHORIZED,
     );
   }
 
@@ -1463,7 +1765,7 @@ export const userBookmarks: AppRouteHandler<UserBookmarksRoute> = async (c) => {
     // Build where clause
     const baseWhere = and(
       eq(bookmarks.userId, userLoggedIn.id),
-      ...(cursor ? [lt(bookmarks.createdAt, new Date(cursor))] : [])
+      ...(cursor ? [lt(bookmarks.createdAt, new Date(cursor))] : []),
     );
 
     // Single query with limit+1 for pagination
@@ -1488,7 +1790,7 @@ export const userBookmarks: AppRouteHandler<UserBookmarksRoute> = async (c) => {
       return c.json(emptyResponse, HttpStatusCodes.OK);
     }
 
-    const resourceIds = userBookmarksWithResources.map((r) => r.resource.id);
+    const resourceIds = userBookmarksWithResources.map(r => r.resource.id);
 
     // Batch Redis operations in a single pipeline
     const pipeline = redis.pipeline();
@@ -1499,17 +1801,17 @@ export const userBookmarks: AppRouteHandler<UserBookmarksRoute> = async (c) => {
 
     // 2. Get user upvote status in the same pipeline if user is logged in
     const upvoteKeys = resourceIds.map(
-      (id) => `upvote:user:${userLoggedIn.id}:resource:${id}`
+      id => `upvote:user:${userLoggedIn.id}:resource:${id}`,
     );
     pipeline.mget(...upvoteKeys);
 
     // Execute all Redis reads in one round trip
     // const [upvoteCountsResult, userUpvotesResult] = await pipeline.exec();
     const execResult = await pipeline.exec();
-    const upvoteCountsResult =
-      (execResult[0] as [Error | null, (string | null)[]])[1] ?? [];
-    const userUpvotesResult =
-      (execResult[1] as [Error | null, (string | null)[]])[1] ?? [];
+    const upvoteCountsResult
+      = (execResult[0] as [Error | null, (string | null)[]])[1] ?? [];
+    const userUpvotesResult
+      = (execResult[1] as [Error | null, (string | null)[]])[1] ?? [];
     // Process upvote counts from Redis
     const upvoteCounts = new Map();
     const missingIds = [];
@@ -1523,7 +1825,8 @@ export const userBookmarks: AppRouteHandler<UserBookmarksRoute> = async (c) => {
 
       if (redisCount !== null && redisCount !== undefined) {
         upvoteCounts.set(resourceId, Number(redisCount));
-      } else {
+      }
+      else {
         missingIds.push(resourceId);
         upvoteCounts.set(resourceId, 0); // Default to 0 initially
       }
@@ -1545,8 +1848,8 @@ export const userBookmarks: AppRouteHandler<UserBookmarksRoute> = async (c) => {
         SELECT resource_id, COUNT(*) as count
         FROM resource_upvotes
         WHERE resource_id IN (${sql.join(
-          missingIds.map((id) => sql`${id}`),
-          sql`, `
+          missingIds.map(id => sql`${id}`),
+          sql`, `,
         )})
         GROUP BY resource_id
       `);
@@ -1567,7 +1870,7 @@ export const userBookmarks: AppRouteHandler<UserBookmarksRoute> = async (c) => {
 
       // Set 0 counts for any remaining IDs
       missingIds.forEach((id) => {
-        if (!dbCounts.some((row) => row.resource_id === id)) {
+        if (!dbCounts.some(row => row.resource_id === id)) {
           updatePipeline.set(getUpvoteCountKey(id), 0, {
             ex: UPVOTE_COUNT_TTL,
           });
@@ -1611,11 +1914,12 @@ export const userBookmarks: AppRouteHandler<UserBookmarksRoute> = async (c) => {
 
     logger.debug(`Bookmarks data cached with key ${cacheKey}`);
     return c.json(response, HttpStatusCodes.OK);
-  } catch (error) {
+  }
+  catch (error) {
     logger.error("Error in user bookmarks handler:", error);
     return c.json(
       { success: false, message: "Internal server error" },
-      HttpStatusCodes.INTERNAL_SERVER_ERROR
+      HttpStatusCodes.INTERNAL_SERVER_ERROR,
     );
   }
 };

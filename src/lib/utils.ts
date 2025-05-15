@@ -1,11 +1,14 @@
 import type { PinoLogger } from "hono-pino";
 
+import { GoogleGenAI } from "@google/genai";
 import { eq } from "drizzle-orm";
 
 import db from "@/db";
 import { resources } from "@/db/schema";
 
+import env from "./env";
 import { redisIo } from "./redis";
+import { vectorIndex } from "./vectordb";
 
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png"] as const;
 export function isResourceType(value: string): value is "video" | "article" {
@@ -56,4 +59,38 @@ export async function syncUpvoteCount(logger: PinoLogger) {
   logger.info(
     `Total upvote keys processed: ${keys.length}, successfully synced: ${syncedCount}`,
   );
+}
+export async function getEmbedding(query: string) {
+  const ai = new GoogleGenAI({ apiKey: env.AI_API_KEY });
+  const result = await ai.models.embedContent({
+    // model: "gemini-embedding-exp-03-07",
+    model: "text-embedding-004",
+    contents: query,
+    config: {
+      taskType: "SEMANTIC_SIMILARITY",
+    },
+  });
+  const embedding = result?.embeddings?.[0];
+  return embedding?.values;
+}
+
+export async function getEmbeddingSearchResults(
+  queryEmbedding: number[],
+  topK: number,
+  logger: PinoLogger,
+) {
+  try {
+    const result = await vectorIndex.query({
+      vector: queryEmbedding,
+      topK,
+      includeMetadata: true,
+    });
+    logger.info(`Found ${result.length} matches`);
+    return result;
+  }
+  catch (error) {
+    console.log("ERROR", error);
+    logger.error(`Error getting embedding search results:`, error);
+    return [];
+  }
 }

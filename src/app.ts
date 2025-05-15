@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 
+import { eq } from "drizzle-orm";
 import { createRouteHandler } from "uploadthing/server";
 
 import categories from "@/routes/categories/categories.index";
@@ -7,6 +8,8 @@ import index from "@/routes/index.route";
 import resources from "@/routes/resources/resources.index";
 import tags from "@/routes/tags/tags.index";
 
+import db from "./db";
+import { resources as resourcesTable } from "./db/schema";
 import { auth } from "./lib/auth";
 import configureOpenAPI from "./lib/configure-open-api";
 import createApp from "./lib/create-app";
@@ -14,7 +17,8 @@ import env from "./lib/env";
 import { qstashReceiver } from "./lib/qstash";
 import { redisIo } from "./lib/redis";
 import { uploadRouter } from "./lib/uploadthing";
-import { syncUpvoteCount } from "./lib/utils";
+import { getEmbedding, syncUpvoteCount } from "./lib/utils";
+import { vectorIndex } from "./lib/vectordb";
 import { isAuth } from "./middlewares/is-auth";
 import { upvoteJobBatch } from "./routes/resources/resources.handlers";
 
@@ -150,7 +154,10 @@ app.get("/stream", (c: Context) => {
           controller.enqueue(`data: ${message}\n\n`);
         }
         catch (err) {
-          logger.warn(`Stream ${connectionId} closed. Cannot enqueue message.`);
+          logger.warn(
+            `Stream ${connectionId} closed. Cannot enqueue message.`,
+            err,
+          );
         }
       };
 
@@ -170,27 +177,28 @@ app.get("/stream", (c: Context) => {
       subscribe();
 
       dedicatedSubscriber.on("message", onMessage);
-
+      let keepAliveTimer: NodeJS.Timeout;
       let keepAliveDelay = 15000; // Start with 15s
-      let consecutiveErrors = 0;
+      let _consecutiveErrors = 0;
       const sendKeepAlive = () => {
         try {
           controller.enqueue(`: keep-alive ${Date.now()}\n\n`);
-          consecutiveErrors = 0;
+          _consecutiveErrors = 0;
           keepAliveDelay = 15000; // Reset to normal interval
         }
         catch (err) {
-          consecutiveErrors++;
+          _consecutiveErrors++;
           keepAliveDelay = Math.min(keepAliveDelay * 2, 120000); // Max 2 minutes
           logger.warn(
             `Keep-alive failed for ${connectionId}. Increasing delay to ${keepAliveDelay}ms.`,
+            err,
           );
         }
 
         keepAliveTimer = setTimeout(sendKeepAlive, keepAliveDelay);
       };
 
-      let keepAliveTimer = setTimeout(sendKeepAlive, keepAliveDelay);
+      keepAliveTimer = setTimeout(sendKeepAlive, keepAliveDelay);
 
       // Handle client disconnects
       c.req.raw.signal.addEventListener("abort", async () => {
@@ -220,5 +228,33 @@ app.get("/stream", (c: Context) => {
       "Connection": "keep-alive",
     },
   });
+});
+app.get("/index-search", async (c) => {
+  const { logger } = c.var;
+  try {
+    const allResources = await db.query.resources.findMany({
+      where: eq(resourcesTable.isPublished, true),
+    });
+    for (const res of allResources) {
+      const embedding = await getEmbedding(res.title);
+      if (!embedding)
+        continue;
+      logger.info("Upserting embedding for resource", res.id);
+      await vectorIndex.upsert([
+        {
+          id: res.id,
+          vector: embedding,
+          metadata: {
+            title: res.title,
+          },
+        },
+      ]);
+      logger.info("Upserted embedding for resource", res.id);
+    }
+    return c.json({ success: true, message: "Embeddings stored successfully" });
+  }
+  catch (error) {
+    console.log("ERROR", error);
+  }
 });
 export default app;

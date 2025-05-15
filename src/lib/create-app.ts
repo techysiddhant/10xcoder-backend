@@ -37,12 +37,15 @@ class RedisRateLimiter {
 export default function createApp() {
   const app = createRouter();
   app.use("*", async (c, next) => {
-    const ratelimit = RedisRateLimiter.getInstance();
-    const ip = c.req.header("cf-connecting-ip") ?? "anonymous";
-    const result = await ratelimit.limit(ip);
-    c.set("ratelimit", ratelimit);
-    if (!result.success) {
-      return c.json({ error: "Rate limit exceeded" }, 429);
+    if (env.NODE_ENV !== "development") {
+      const ratelimit = RedisRateLimiter.getInstance();
+      const ip = c.req.header("cf-connecting-ip") ?? "anonymous";
+      const result = await ratelimit.limit(ip);
+      c.set("ratelimit", ratelimit);
+      if (!result.success) {
+        return c.json({ error: "Rate limit exceeded" }, 429);
+      }
+      return next();
     }
     return next();
   });
@@ -58,7 +61,7 @@ export default function createApp() {
         "Content-Type",
         "Authorization",
         "x-uploadthing-version",
-        "x-uploadthing-package", // 👈 add this
+        "x-uploadthing-package",
       ],
       allowMethods: ["POST", "GET", "OPTIONS", "PUT", "PATCH"],
       exposeHeaders: ["Content-Length"],
