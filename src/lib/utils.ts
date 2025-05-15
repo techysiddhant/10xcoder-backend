@@ -1,10 +1,13 @@
 import type { PinoLogger } from "hono-pino";
 
+import { GoogleGenAI } from "@google/genai";
+import { Index } from "@upstash/vector";
 import { eq } from "drizzle-orm";
 
 import db from "@/db";
 import { resources } from "@/db/schema";
 
+import env from "./env";
 import { redisIo } from "./redis";
 
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png"] as const;
@@ -56,4 +59,42 @@ export async function syncUpvoteCount(logger: PinoLogger) {
   logger.info(
     `Total upvote keys processed: ${keys.length}, successfully synced: ${syncedCount}`,
   );
+}
+export async function getEmbedding(query: string) {
+  const ai = new GoogleGenAI({ apiKey: env.AI_API_KEY });
+  const result = await ai.models.embedContent({
+    // model: "gemini-embedding-exp-03-07",
+    model: "text-embedding-004",
+    contents: query,
+    config: {
+      taskType: "SEMANTIC_SIMILARITY",
+    },
+  });
+  const embedding = result?.embeddings?.[0];
+  return embedding?.values;
+}
+
+export async function getEmbeddingSearchResults(
+  queryEmbedding: number[],
+  topK: number,
+  logger: PinoLogger,
+) {
+  const index = new Index({
+    url: env.UPSTASH_VECTOR_REST_URL,
+    token: env.UPSTASH_VECTOR_REST_TOKEN,
+  });
+  try {
+    const result = await index.query({
+      vector: queryEmbedding,
+      topK,
+      includeMetadata: true,
+    });
+    logger.info(`Found ${result.length} matches`);
+    return result;
+  }
+  catch (error) {
+    console.log("ERROR", error);
+    logger.error(`Error getting embedding search results:`, error);
+    return [];
+  }
 }

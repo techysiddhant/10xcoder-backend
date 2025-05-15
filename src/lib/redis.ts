@@ -20,4 +20,5 @@ redisSubscriber.on("error", (err) => {
 
 export const CACHE_VERSIONS = {
   BOOKMARKS: "V1",
+  SEARCH: "V1",
 };
