@@ -12,7 +12,8 @@
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
     "db:migrate": "drizzle-kit migrate",
-    "prepare": "husky install"
+    "prepare": "husky install",
+    "test": "echo \"No tests yet\" && exit 0"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.0",
