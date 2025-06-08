@@ -57,7 +57,7 @@ jobs:
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd /home/deploy/hono-api
+            cd ~/app
             # Create .env file with proper permissions
             cat << 'EOF' > .env
             DATABASE_URL=${{ secrets.DATABASE_URL }}
