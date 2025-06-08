@@ -57,7 +57,12 @@ jobs:
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd ~/app
+            cd ~/app || mkdir -p ~/app && cd ~/app
+            if [ ! -d ".git" ]; then
+              git clone git@github.com:100xcoding/no-name-backend.git .
+            else
+              git pull origin main
+            fi
             # Create .env file securely
             echo "DATABASE_URL=${DATABASE_URL}" > .env
             echo "LOG_LEVEL=${LOG_LEVEL}" >> .env
