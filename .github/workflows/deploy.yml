@@ -63,6 +63,9 @@ jobs:
             else
               git pull origin main
             fi
+            # Debug: Check if docker-compose.yml is present
+            ls -l docker-compose.yml || echo "docker-compose.yml not found!"
+            cat docker-compose.yml || echo "Cannot read docker-compose.yml!"
             # Create .env file securely
             echo "DATABASE_URL=${DATABASE_URL}" > .env
             echo "LOG_LEVEL=${LOG_LEVEL}" >> .env
