@@ -11,18 +11,20 @@ RUN corepack enable && corepack prepare pnpm@8.15.1 --activate
 # Set working directory
 WORKDIR /app
 
-# Change ownership to non-root user
-RUN chown -R nextjs:nodejs /app
-USER nextjs
-
-# Copy package files
+# Copy package files as root
 COPY package.json pnpm-lock.yaml ./
 
-# Install dependencies
+# Install dependencies as root
 RUN pnpm install --no-frozen-lockfile
 
-# Copy source code
+# Copy the rest of the source code
 COPY . .
+
+# Change ownership to non-root user after install & copy
+RUN chown -R nextjs:nodejs /app
+
+# Switch to non-root
+USER nextjs
 
 # Build the application
 RUN pnpm build
@@ -35,4 +37,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 EXPOSE 3000
 
 # Start the application from dist folder
-CMD ["node", "dist/src/index.js"] 
+CMD ["node", "dist/src/index.js"]
