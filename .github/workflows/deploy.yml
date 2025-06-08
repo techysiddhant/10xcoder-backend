@@ -5,24 +5,24 @@ on:
     branches: [ main ]
 
 env:
-  DOCKER_IMAGE: your-dockerhub-username/hono-api
+  DOCKER_IMAGE: techysiddhant/hono-api
   DOCKER_TAG: ${{ github.sha }}
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install pnpm
         uses: pnpm/action-setup@v2
         with:
-          version: latest
+          version: 8.15.1
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -34,13 +34,13 @@ jobs:
         run: pnpm build
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5
         with:
           context: .
           push: true
@@ -50,16 +50,6 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      - name: Create .env file
-        run: |
-          cat << EOF > .env
-          DATABASE_URL=${{ secrets.DATABASE_URL }}
-          JWT_SECRET=${{ secrets.JWT_SECRET }}
-          API_KEY=${{ secrets.API_KEY }}
-          NODE_ENV=production
-          PORT=3000
-          EOF
-
       - name: Deploy to VPS
         uses: appleboy/ssh-action@master
         with:
@@ -67,11 +57,21 @@ jobs:
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd /path/to/your/app
-            # Copy the .env file to the server
-            cat > .env << 'EOL'
-            ${{ secrets.ENV_FILE_CONTENT }}
-            EOL
+            cd /home/deploy/hono-api
+            # Create .env file with proper permissions
+            cat << 'EOF' > .env
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            API_KEY=${{ secrets.API_KEY }}
+            NODE_ENV=production
+            PORT=3000
+            DOMAIN_NAME=${{ secrets.DOMAIN_NAME }}
+            EOF
+            # Set proper permissions
+            chmod 600 .env
+            # Pull latest image and deploy
             docker pull ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
             docker-compose down
-            docker-compose up -d 
+            docker-compose up -d
+            # Clean up sensitive files
+            rm -f .env 
