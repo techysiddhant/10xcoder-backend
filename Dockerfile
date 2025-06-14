@@ -11,31 +11,38 @@ RUN corepack enable && corepack prepare pnpm@8.15.1 --activate
 # Set working directory
 WORKDIR /app
 
-# Copy package files as root
+# Copy package files
 COPY package.json pnpm-lock.yaml ./
 
+# Set memory cap
 ENV NODE_OPTIONS=--max-old-space-size=512
-# Install dependencies as root
-RUN pnpm install --prod
+
+# Install all dependencies (dev + prod)
+RUN pnpm install
 
 # Copy the rest of the source code
 COPY . .
 
-# Change ownership to non-root user after install & copy
+# Change ownership
 RUN chown -R nextjs:nodejs /app
 
 # Switch to non-root
 USER nextjs
 
-# Build the application
+# Build the app
 RUN pnpm build
 
-# Add health check
+# Optional: Prune devDependencies to reduce size
+USER root
+RUN pnpm prune --prod
+USER nextjs
+
+# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node --version || exit 1
 
-# Expose the port your app runs on
+# Expose app port
 EXPOSE 3000
 
-# Start the application from dist folder
+# Start the app
 CMD ["node", "dist/src/index.js"]
