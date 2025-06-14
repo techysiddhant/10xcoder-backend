@@ -57,12 +57,15 @@ jobs:
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd ~/app || mkdir -p ~/app && cd ~/app
-            if [ ! -d ".git" ]; then
-              git clone git@github.com:100xcoding/no-name-backend.git .
-            else
-              git pull origin main
+            mkdir -p ~/app
+            cd ~/app
+
+            if [ ! -d "hono-api/.git" ]; then
+              git clone https://github.com/100xcoding/no-name-backend.git
             fi
+
+            cd hono-api
+            git pull origin main
             # Debug: Check if docker-compose.yml is present
             ls -l docker-compose.yml || echo "docker-compose.yml not found!"
             cat docker-compose.yml || echo "Cannot read docker-compose.yml!"
