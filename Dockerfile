@@ -14,10 +14,7 @@ WORKDIR /app
 # Copy package files
 COPY package.json pnpm-lock.yaml ./
 
-# Set memory cap
-ENV NODE_OPTIONS=--max-old-space-size=512
-
-# Install all dependencies (dev + prod)
+# Install all dependencies
 RUN pnpm install
 
 # Copy the rest of the source code
@@ -29,12 +26,15 @@ RUN chown -R nextjs:nodejs /app
 # Switch to non-root
 USER nextjs
 
+# 🧠 Increase heap memory limit just for build step
+ENV NODE_OPTIONS=--max-old-space-size=2048
+
 # Build the app
 RUN pnpm build
 
-# Optional: Prune devDependencies to reduce size
+# Optional: Switch back to root to prune devDependencies
 USER root
-RUN pnpm prune --prod
+RUN pnpm prune --prod --ignore-scripts
 USER nextjs
 
 # Health check
