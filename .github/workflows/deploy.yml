@@ -99,6 +99,7 @@ jobs:
             AI_API_KEY=${{ secrets.AI_API_KEY }}
             UPSTASH_VECTOR_REST_URL=${{ secrets.UPSTASH_VECTOR_REST_URL }}
             UPSTASH_VECTOR_REST_TOKEN=${{ secrets.UPSTASH_VECTOR_REST_TOKEN }}
+            EOF
             # Set proper permissions
             chmod 600 .env
             # Pull latest image and deploy
