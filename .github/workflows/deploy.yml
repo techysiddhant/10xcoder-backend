@@ -57,11 +57,12 @@ jobs:
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
             mkdir -p ~/app
             cd ~/app
 
             if [ ! -d "hono-api/.git" ]; then
-              git clone https://github.com/100xcoding/no-name-backend.git
+              git clone git@github.com:100xcoding/no-name-backend.git
             fi
 
             cd hono-api
