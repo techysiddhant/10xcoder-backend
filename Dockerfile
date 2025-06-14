@@ -14,8 +14,9 @@ WORKDIR /app
 # Copy package files as root
 COPY package.json pnpm-lock.yaml ./
 
+ENV NODE_OPTIONS=--max-old-space-size=512
 # Install dependencies as root
-RUN pnpm install --no-frozen-lockfile
+RUN pnpm install --prod
 
 # Copy the rest of the source code
 COPY . .
