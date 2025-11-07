@@ -25,8 +25,8 @@ export interface Env {
     RESEND_EMAIL: string;
     GOOGLE_CLIENT_ID: string;
     GOOGLE_CLIENT_SECRET: string;
-    GITHUB_CLIENT_ID: string;
-    GITHUB_CLIENT_SECRET: string;
+    G_CLIENT_ID: string;
+    G_CLIENT_SECRET: string;
     MY_BUCKET: R2Bucket;
     MY_KV: KVNamespace;
     UPSTASH_REDIS_REST_URL: string;
