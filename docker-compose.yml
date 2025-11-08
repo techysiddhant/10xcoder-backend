@@ -1,6 +1,45 @@
 version: "3.8"
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres_db
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-myapp}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  migration:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL}
+    networks:
+      - app-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: sh -c "pnpm install && npx drizzle-kit migrate"
+    restart: "no"
+
   api:
     build:
       context: .
@@ -12,9 +51,15 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
+      - DATABASE_URL=${DATABASE_URL}
     restart: unless-stopped
     networks:
       - app-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "node", "--version"]
       interval: 30s
@@ -46,3 +91,7 @@ services:
 networks:
   app-network:
     driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local

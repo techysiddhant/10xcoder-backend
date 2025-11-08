@@ -57,20 +57,22 @@ jobs:
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
+            # --- Setup and Clone ---
+            # Ensure proper SSH access for Git clone
             ssh-keyscan github.com >> ~/.ssh/known_hosts
             mkdir -p ~/app
             cd ~/app
 
+            # Git clone if it doesn't exist
             if [ ! -d "hono-api/.git" ]; then
               git clone git@github.com:100xcoding/no-name-backend.git
             fi
 
             cd hono-api
             git pull origin main
-            # Debug: Check if docker-compose.yml is present
-            ls -l docker-compose.yml || echo "docker-compose.yml not found!"
-            cat docker-compose.yml || echo "Cannot read docker-compose.yml!"
-            # Create .env file securely
+
+            # --- Securely Create .env File ---
+            # Recreate the .env file with secrets
             cat <<EOF > .env
             DATABASE_URL=${{ secrets.DATABASE_URL }}
             LOG_LEVEL=${{ secrets.LOG_LEVEL }}
@@ -100,39 +102,22 @@ jobs:
             UPSTASH_VECTOR_REST_URL=${{ secrets.UPSTASH_VECTOR_REST_URL }}
             UPSTASH_VECTOR_REST_TOKEN=${{ secrets.UPSTASH_VECTOR_REST_TOKEN }}
             EOF
-            # Set proper permissions
+            # Set proper permissions for the .env file
             chmod 600 .env
-            # Pull latest image and deploy
-            docker pull ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_TAG }}
+
+            # --- Deployment and Migration ---
+            # Pull latest image for the API/Migration service
+            docker pull ${{ env.DOCKER_IMAGE }}:latest
+
+            # Stop and remove existing containers, preserving volumes (for Postgres data)
             docker-compose down
-            docker-compose up -d
-            # Clean up sensitive files
-            rm -f .env
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          LOG_LEVEL: ${{ secrets.LOG_LEVEL }}
-          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
-          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }} 
-          BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
-          NODE_ENV: ${{ secrets.NODE_ENV }}
-          PORT: ${{ secrets.PORT }}
-          APP_URL: ${{ secrets.APP_URL }}
-          ORIGIN_URL: ${{ secrets.ORIGIN_URL }}
-          EMAIL_VERIFICATION_CALLBACK_URL: ${{ secrets.EMAIL_VERIFICATION_CALLBACK_URL }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          RESEND_EMAIL: ${{ secrets.RESEND_EMAIL }}
-          G_CLIENT_ID: ${{ secrets.G_CLIENT_ID }} 
-          G_CLIENT_SECRET: ${{ secrets.G_CLIENT_SECRET }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
-          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
-          UPLOADTHING_TOKEN: ${{ secrets.UPLOADTHING_TOKEN }}
-          REDIS_URL: ${{ secrets.REDIS_URL }}
-          QSTASH_URL: ${{ secrets.QSTASH_URL }}
-          QSTASH_TOKEN: ${{ secrets.QSTASH_TOKEN }}
-          QSTASH_CURRENT_SIGNING_KEY: ${{ secrets.QSTASH_CURRENT_SIGNING_KEY }}
-          QSTASH_NEXT_SIGNING_KEY: ${{ secrets.QSTASH_NEXT_SIGNING_KEY }}
-          AI_API_KEY: ${{ secrets.AI_API_KEY }}
-          UPSTASH_VECTOR_REST_URL: ${{ secrets.UPSTASH_VECTOR_REST_URL }}
-          UPSTASH_VECTOR_REST_TOKEN: ${{ secrets.UPSTASH_VECTOR_REST_TOKEN }}
+
+            # Start services:
+            # 1. postgres starts (must be healthy)
+            # 2. migration starts, runs 'pnpm install && npx drizzle-kit migrate', and exits successfully
+            # 3. api starts (must have a healthy postgres and a successful migration)
+            # 4. nginx starts
+            docker-compose up -d --build
+
+            # The migration service will run and exit, but we keep the .env file
+            # as it is referenced by the 'api' service to run the app.
