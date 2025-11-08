@@ -6,13 +6,15 @@ RUN addgroup -g 1001 -S nodejs && \
     adduser -S nextjs -u 1001 -G nodejs
 
 # Install pnpm
-RUN corepack enable && corepack prepare pnpm@8.15.1 --activate
+RUN corepack enable && corepack prepare pnpm@10.20.0 --activate
 
 # Set working directory
 WORKDIR /app
 
 # Copy package files
 COPY package.json pnpm-lock.yaml ./
+
+ENV HUSKY=0
 
 # Install all dependencies
 RUN pnpm install
@@ -34,7 +36,8 @@ RUN pnpm build
 
 # Optional: Switch back to root to prune devDependencies
 USER root
-RUN pnpm prune --prod --no-scripts
+RUN npm pkg delete scripts.prepare
+RUN pnpm prune --prod
 USER nextjs
 
 # Health check
