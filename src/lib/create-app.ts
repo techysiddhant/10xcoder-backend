@@ -1,8 +1,12 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
+import * as Sentry from "@sentry/node";
 import { Ratelimit } from "@upstash/ratelimit";
 import { cors } from "hono/cors";
+import { HTTPException } from "hono/http-exception";
 import { notFound, onError } from "stoker/middlewares";
 import { defaultHook } from "stoker/openapi";
+
+import "./instrument.mjs";
 
 import { pinoLogger } from "@/middlewares/pino-logger";
 
@@ -36,6 +40,7 @@ class RedisRateLimiter {
 }
 export default function createApp() {
   const app = createRouter();
+
   app.use("*", async (c, next) => {
     if (env.NODE_ENV !== "development") {
       const ratelimit = RedisRateLimiter.getInstance();
@@ -51,7 +56,6 @@ export default function createApp() {
   });
 
   app.notFound(notFound);
-  app.onError(onError);
   app.use(pinoLogger());
   app.use(
     "*",
@@ -81,5 +85,24 @@ export default function createApp() {
     c.set("session", session.session);
     return next();
   });
+  app
+    .onError((err, c) => {
+      Sentry.captureException(err);
+      if (err instanceof HTTPException) {
+        return err.getResponse();
+      }
+      const fallback = onError(err, c);
+      if (fallback)
+        return fallback;
+      return c.json({ error: "Internal server error" }, 500);
+    })
+    .use((c, next) => {
+      if (c.get("user")?.email) {
+        Sentry.setUser({
+          email: c.get("user")?.email,
+        });
+      }
+      return next();
+    });
   return app;
 }
