@@ -19,6 +19,9 @@ import { isAuth } from "./middlewares/is-auth";
 import { upvoteJobBatch } from "./routes/resources/resources.handlers";
 
 const app = createApp();
+app.get("/debug-sentry", () => {
+  throw new Error("My first Sentry error!");
+});
 app.on("POST", "/api/upvote/sync", async (c: Context) => {
   const { logger } = c.var;
   logger.info("Received upvote sync request");
