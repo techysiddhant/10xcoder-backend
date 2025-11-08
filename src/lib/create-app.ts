@@ -91,6 +91,9 @@ export default function createApp() {
       if (err instanceof HTTPException) {
         return err.getResponse();
       }
+      const fallback = onError(err, c);
+      if (fallback)
+        return fallback;
       return c.json({ error: "Internal server error" }, 500);
     })
     .use((c, next) => {
@@ -101,6 +104,5 @@ export default function createApp() {
       }
       return next();
     });
-  app.onError(onError);
   return app;
 }
