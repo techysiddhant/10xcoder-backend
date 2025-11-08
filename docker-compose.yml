@@ -32,6 +32,7 @@ services:
     environment:
       - NODE_ENV=production
       - DATABASE_URL=${DATABASE_URL}
+      - CI=true
     networks:
       - app-network
     depends_on:
