@@ -34,7 +34,7 @@ RUN pnpm build
 
 # Optional: Switch back to root to prune devDependencies
 USER root
-RUN pnpm prune --prod --ignore-scripts
+RUN pnpm prune --prod
 USER nextjs
 
 # Health check
