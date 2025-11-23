@@ -6,7 +6,7 @@ import { HTTPException } from "hono/http-exception";
 import { notFound, onError } from "stoker/middlewares";
 import { defaultHook } from "stoker/openapi";
 
-import "./instrument.mjs";
+import "./instrument";
 
 import { pinoLogger } from "@/middlewares/pino-logger";
 
